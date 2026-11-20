@@ -144,17 +144,12 @@ func groupFingerprint(detail ResultDetail) (string, bool) {
 		detail.Dataset.Text("dataset_version"), detail.Dataset.Text("data_split"),
 		baseMetric(result), result.Text("metric_variant"), cutoff, unit,
 		result.Text("aggregation"), detail.Experiment.Text("evaluation_protocol"),
-		detail.Experiment.Text("instrument_characteristics"),
-		detail.Experiment.Text("measurement_conditions"),
 	}
 	for index := range values {
 		values[index] = key(values[index])
 		if values[index] == "" {
 			return "", false
 		}
-	}
-	if key(detail.Experiment.Text("instrument")) == "" && key(detail.Experiment.Text("instrument_equivalence_id")) == "" {
-		return "", false
 	}
 	encoded, err := json.Marshal(values)
 	return string(encoded), err == nil

@@ -970,9 +970,6 @@ const CRITERION_LABELS = {
   task: "Задача", dataset: "Датасет", dataset_version: "Версия датасета", data_split: "Разбиение выборки",
   metric_definition: "Определение метрики", metric_k: "Параметр K", scale: "Шкала", aggregation: "Агрегация",
   evaluation_protocol: "Протокол оценки",
-  instrument: "Прибор или измерительная система",
-  instrument_characteristics: "Характеристики прибора",
-  measurement_conditions: "Условия измерения",
 };
 const CRITERION_STYLES = {
   match: ["success", "Совпадает"], mismatch: ["error", "Различается"], missing: ["warning", "Нет сведений"],

@@ -110,10 +110,6 @@
       "properties": {
         "experiment_id": { "$ref": "#/$defs/ID" },
         "evaluation_protocol": { "$ref": "#/$defs/MaybeText" },
-        "instrument": { "$ref": "#/$defs/MaybeText" },
-        "instrument_equivalence_id": { "$ref": "#/$defs/MaybeText" },
-        "instrument_characteristics": { "$ref": "#/$defs/MaybeText" },
-        "measurement_conditions": { "$ref": "#/$defs/MaybeText" },
         "baseline_name": { "$ref": "#/$defs/MaybeText" },
         "hardware": { "$ref": "#/$defs/MaybeText" },
         "latency_ms": { "type": ["number", "null"], "minimum": 0 },

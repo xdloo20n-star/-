@@ -12,8 +12,8 @@ MISSING = {"-", "–", "—", "N/A", "n/a", "NA"}
 NUMBER = re.compile(r"[+−-]?(?:\d+(?:[.,]\d+)?|\.\d+)(?:[eE][+-]?\d+)?%?")
 CAPTION = re.compile(r"^\s*(table\s+(?:\d+(?:\.\d+)*|[ivxlcdm]+))(?=[:.\s-]|$)", re.I)
 SCORE = re.compile(
-    r"(?P<name>(?:answer\s+)?(?:exact\s+match|precision|recall|relevance|correctness|similarity|accuracy)"
-    r"|EM|F1|MRR|MAP|(?:n?DCG|Hit(?:s|\s+rate)?)|ROUGE(?:[-_ ]?[1-9L])?"
+    r"(?P<name>(?:answer\s+)?(?:classification\s+accuracy|exact\s+match|precision|recall|relevance|correctness|similarity|accuracy)"
+    r"|EM|F1(?:[- ]Score)?|MRR|MAP|(?:n?DCG|Hit(?:s|\s+rate)?)|ROUGE(?:[-_ ]?[1-9L])?"
     r"|BLEU(?:[-_ ]?[1-9])?|BERTScore|faithfulness|groundedness|AUC|latency|response\s+time)"
     r"(?:\s*@\s*(?P<cutoff>\d+))?"
     r"(?:\s*\(\s*(?P<unit>%|fraction|ms|s|sec|seconds?|milliseconds?)\s*\)|\s*(?P<percent>%))?",
@@ -83,6 +83,8 @@ def headers(line: str) -> list[Header]:
             continue
         cutoff = match["cutoff"]
         name = match["name"].strip()
+        if name.casefold() == "f1-score":
+            name = "F1"
         if cutoff is not None:
             name += f"@{cutoff}"
         found.append(Header(
@@ -96,6 +98,7 @@ def headers(line: str) -> list[Header]:
     # The region between recognized labels may contain separator rules from OCR.
     offset = max(0, int(found[0].center - len(found[0].label) / 2))
     tail = SCORE.sub("", line[offset:])
+    tail = re.sub(r"\bbenchmarks?\b", " ", tail, flags=re.I)
     if re.search(r"[A-Za-z]{2,}|\d{2,}", tail):
         return []
     return found
@@ -199,11 +202,20 @@ def read_tables(page: Page) -> list[Table]:
                 continue
             label = match[1]
             caption = " ".join(lines[caption_at].split())
+            aggregate_label = ("reported average"
+                               if re.search(r"\bmetrics?\s*\(\s*averages?\s*\)", caption, re.I)
+                               else None)
+            if re.search(r"\bclassification\s+metrics\b", caption, re.I):
+                found = [Header(
+                    header.label,
+                    "Classification accuracy" if header.name.casefold() == "accuracy" else header.name,
+                    header.center, header.cutoff, None,
+                ) for header in found]
             if not groups:
                 caption_groups = list(GROUP.finditer(caption))
                 if len(caption_groups) == 1:
                     names = [caption_groups[0][0]] * len(found)
-            aggregations = ("mean", "std") if width == 2 * len(found) else (None,)
+            aggregations = ("mean", "std") if width == 2 * len(found) else (aggregate_label,)
             columns = [Column(header, name, aggregate, generator)
                        for header, name, generator in zip(found, names, generators, strict=True)
                        for aggregate in aggregations]

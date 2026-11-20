@@ -328,7 +328,7 @@ components:
       required: [criterion, status, message]
       properties:
         criterion:
-          enum: [task, dataset, dataset_version, data_split, metric_definition, metric_k, scale, aggregation, evaluation_protocol, instrument, instrument_characteristics, measurement_conditions]
+          enum: [task, dataset, dataset_version, data_split, metric_definition, metric_k, scale, aggregation, evaluation_protocol]
         status: {enum: [match, mismatch, missing, not_applicable]}
         message: {type: string, minLength: 1}
     GroupResult:

@@ -7,7 +7,7 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 from pdf_pages import Page, read_pdf
-from rag_tables import read_tables
+from rag_tables import headers, read_tables
 
 
 def layout_line(*cells: tuple[int, str]) -> str:
@@ -42,7 +42,43 @@ METRIC_COMPARISON = [
 ]
 
 
+CLASSIFICATION_AVERAGES = [
+    "Table 1. Classification metrics (averages) for the router.",
+    layout_line((0, "Benchmark"), (14, "Accuracy (%)"), (30, "Precision (%)"),
+                (47, "Recall (%)"), (61, "F1-Score (%)"), (77, "AUC (%)")),
+    layout_line((0, "MIRAGE"), (14, "86.63"), (30, "86.79"), (47, "83.35"), (61, "84.96"), (77, "92.94")),
+    layout_line((0, "MMLU"), (14, "90.93"), (30, "71.64"), (47, "82.92"), (61, "76.87"), (77, "95.77")),
+    layout_line((0, "FeB4RAG"), (14, "83.05"), (30, "87.37"), (47, "89.70"), (61, "88.51"), (77, "84.00")),
+]
+
+
 class NativeComparisonTest(unittest.TestCase):
+    def test_benchmark_classification_headers_and_explicit_average(self):
+        table, = read_tables(Page(10, "\n".join(CLASSIFICATION_AVERAGES), "text_match"))
+        self.assertEqual([column.header.name for column in table.columns],
+                         ["Classification accuracy", "Precision", "Recall", "F1", "AUC"])
+        self.assertEqual([column.header.unit for column in table.columns], [None] * 5)
+        self.assertEqual([column.aggregation for column in table.columns], ["reported average"] * 5)
+        self.assertEqual(table.rows, [
+            ("MIRAGE", ["86.63", "86.79", "83.35", "84.96", "92.94"]),
+            ("MMLU", ["90.93", "71.64", "82.92", "76.87", "95.77"]),
+            ("FeB4RAG", ["83.05", "87.37", "89.70", "88.51", "84.00"]),
+        ])
+
+    def test_average_aggregation_requires_explicit_caption_evidence(self):
+        lines = CLASSIFICATION_AVERAGES.copy()
+        lines[0] = "Table 1. Classification metrics for the router."
+        table, = read_tables(Page(10, "\n".join(lines), "text_match"))
+        self.assertEqual([column.aggregation for column in table.columns], [None] * 5)
+
+    def test_f1_score_header_keeps_boundary_and_unrelated_prose_is_rejected(self):
+        line = CLASSIFICATION_AVERAGES[1]
+        self.assertEqual([header.name for header in headers(line)],
+                         ["Accuracy", "Precision", "Recall", "F1", "AUC"])
+        unrelated = layout_line((0, "Benchmark"), (14, "Accuracy (%)"),
+                                (30, "F1-Score (%)"), (48, "Unrelated narrative"))
+        self.assertEqual(headers(unrelated), [])
+
     def test_centered_benchmark_rows_preserve_score_and_coordinates(self):
         page = Page(4, "\n".join(BENCHMARK_COMPARISON), "text_match")
         table, = read_tables(page)
@@ -113,6 +149,7 @@ class NativeDevPDFTest(unittest.TestCase):
         expected = {
             "D003": {(8, "Table 2"): 18},
             "D004": {(6, "Table 2"): 14, (17, "Table 12"): 14},
+            "D010": {(10, "Table 1"): 15},
             "D020": {(5, "Table 5"): 6},
             "D001": {(6, "Table 1"): 252},
             "D019": {(5, "Table 1"): 154, (7, "Table 4"): 20},

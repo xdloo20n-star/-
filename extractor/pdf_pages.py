@@ -60,15 +60,16 @@ def usable(text: str) -> bool:
 
 
 def ocr_page(path: Path, number: int, engine: str, dpi: int = 200) -> tuple[str, str]:
+    # Keep Poppler's RGB pixels and skip PNG compression before local OCR.
     image = run([
         "pdftoppm", "-f", str(number), "-l", str(number), "-singlefile",
-        "-r", str(dpi), "-png", str(path),
-    ])
+        "-r", str(dpi), str(path),
+    ], timeout=60)
     env = dict(os.environ)
     env.setdefault("OMP_THREAD_LIMIT", "1")
     recognized_pdf = run([
         engine, "stdin", "stdout", "-l", env.get("OCR_LANG", "eng"),
-        "--psm", "3", "-c", "tessedit_create_pdf=1", "-c", "textonly_pdf=1",
+        "--dpi", str(dpi), "--psm", "3", "-c", "tessedit_create_pdf=1", "-c", "textonly_pdf=1",
     ], data=image, timeout=75, env=env)
     layout = as_text(run(["pdftotext", "-layout", "-enc", "UTF-8", "-", "-"], data=recognized_pdf))
     reading = as_text(run(["pdftotext", "-enc", "UTF-8", "-", "-"], data=recognized_pdf))

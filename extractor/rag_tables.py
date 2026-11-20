@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from itertools import pairwise
 import re
-from statistics import mean
+from statistics import mean, median
 
 from pdf_pages import Page
 
@@ -37,6 +37,11 @@ AGGREGATION_DESCRIPTION = re.compile(r"\bmean\b.{0,100}\bstandard\s+deviation\b"
 DATASET_HEADER = re.compile(r"^\s*(?:benchmarks?|datasets?)\b", re.I)
 TRANSPOSED_METRIC = re.compile(r"\b(factuality|accuracy|faithfulness)\s+scores?\b", re.I)
 HEADER_CELLS = re.compile(r"\S(?:.*?\S)?(?=\s{2,}|$)")
+NATIVE_CAPTION = re.compile(r"(?:^\s*|(?<= {2}))(table\s+(?:\d+(?:\.\d+)*|[ivxlcdm]+))\s*[:.](?=\s|$)", re.I)
+DELTA_HEADER = re.compile(r"Δ|∆|(?:relative\s+|absolute\s+|%\s*)?(?:change|difference)", re.I)
+GROUPED_NUMBER = re.compile(r"[+−-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?%?")
+METRIC_UNIT = re.compile(r"\s*\((%|fraction|ms|s|sec|seconds?|milliseconds?)\)$", re.I)
+TOKEN = re.compile(r"\S+")
 
 
 @dataclass(frozen=True)
@@ -207,7 +212,179 @@ def read_tables(page: Page) -> list[Table]:
             break
     occupied = {table.label.casefold() for table in tables}
     tables.extend(read_transposed_tables(page, lines, captions, occupied))
+    if page.verification == "text_match":
+        tables.extend(read_native_comparisons(page, lines, occupied))
     return sorted(tables, key=lambda table: table.index)
+
+
+def read_native_comparisons(page: Page, lines: list[str], occupied: set[str]) -> list[Table]:
+    tables = []
+    captions = []
+    for index, line in enumerate(lines):
+        for match in NATIVE_CAPTION.finditer(line):
+            caption = re.split(r"\s{2,}", line[match.start(1):].rstrip(), maxsplit=1)[0]
+            captions.append((index, match, caption))
+    for index, line in enumerate(lines):
+        cells = list(HEADER_CELLS.finditer(line.rstrip()))
+        if len(cells) < 3 or not DELTA_HEADER.fullmatch(cells[-1][0]):
+            continue
+        if len(cells) >= 5 and DATASET_HEADER.fullmatch(cells[0][0]) and re.fullmatch(
+            r"models?|generators?|llms?", cells[1][0], re.I,
+        ):
+            table = read_centered_benchmarks(page, lines, index, cells, captions)
+        else:
+            metric_at = next((i for i, cell in enumerate(cells) if cell[0].lower() in {"metric", "metrics"}), None)
+            if metric_at is None or len(cells) - metric_at not in {3, 4}:
+                continue
+            table = read_metric_comparison(page, lines, index, cells[metric_at:], captions)
+        if table and table.label.casefold() not in occupied:
+            tables.append(table)
+            occupied.add(table.label.casefold())
+    return tables
+
+
+def in_column(value: re.Match[str], heading: re.Match[str]) -> bool:
+    return value.start() <= heading.end() + 4 and value.end() >= heading.start() - 4
+
+
+def read_centered_benchmarks(page: Page, lines: list[str], index: int, cells: list[re.Match[str]],
+                             captions: list[tuple[int, re.Match[str], str]]) -> Table | None:
+    benchmark, model, *variants, _ = cells
+    entries = []
+    model_order = None
+    body_end = index + 1
+    # Each standalone benchmark is centered between the two rows it spans.
+    while body_end + 2 < len(lines):
+        above, middle, below = (list(HEADER_CELLS.finditer(line.rstrip())) for line in lines[body_end:body_end + 3])
+        if len(middle) != 1 or abs(middle[0].start() - benchmark.start()) > 2:
+            break
+        dataset = middle[0][0]
+        if middle[0].end() >= model.start() or not re.search(r"[^\W\d_]", dataset):
+            break
+        pair = []
+        for row in (above, below):
+            if len(row) != len(cells) - 1 or abs(row[0].start() - model.start()) > 2:
+                return None
+            if not all(in_column(value, heading) for value, heading in zip(row, cells[1:], strict=True)):
+                return None
+            if not re.search(r"[^\W\d_]", row[0][0]) or not NUMBER.fullmatch(row[-1][0]):
+                return None
+            values = [value[0] for value in row[1:-1]]
+            if not all(value.endswith("%") and NUMBER.fullmatch(value) for value in values):
+                return None
+            pair.append((row[0][0], values))
+        order = tuple(name for name, _ in pair)
+        if order[0] == order[1] or (model_order is not None and order != model_order):
+            return None
+        if any(name == dataset for name, _, _ in entries):
+            return None
+        model_order = order
+        entries.extend((dataset, name, values) for name, values in pair)
+        body_end += 3
+
+    footer = next(((at, match, caption) for at, match, caption in captions
+                   if body_end <= at <= body_end + 2 and CAPTION.match(lines[at])
+                   and all(not line.strip() for line in lines[body_end:at])), None)
+    if len(entries) < 4 or footer is None:
+        return None
+    _, match, caption = footer
+    if not distinct_labels([variant[0] for variant in variants]):
+        return None
+    metric = TRANSPOSED_METRIC.search(caption)
+    header = Header(metric[1] if metric else "%", metric[1] if metric else "Unspecified score", 0, None, "%")
+    columns = [Column(header, dataset, generator=name, original_row=f"{dataset} / {name}")
+               for dataset, name, _ in entries]
+    rows = [(variant[0], [values[i] for _, _, values in entries]) for i, variant in enumerate(variants)]
+    return Table(page, match[1], caption, index, columns, rows)
+
+
+def distinct_labels(labels: list[str]) -> bool:
+    return all(re.search(r"[^\W\d_]", label) for label in labels) and len(set(map(str.casefold, labels))) == len(labels)
+
+
+def read_metric_row(line: str, left: int, first_variant: int) -> tuple[re.Match[str], list[re.Match[str]]] | None:
+    label = next((cell for cell in HEADER_CELLS.finditer(line.rstrip()) if abs(cell.start() - left) <= 2), None)
+    if label is None or label.end() >= first_variant:
+        return None
+    tokens = list(TOKEN.finditer(line, label.end()))
+    if len(tokens) != 3:
+        return None
+    scores, delta = tokens[:2], tokens[-1][0]
+    if not all(NUMBER.fullmatch(score[0]) or GROUPED_NUMBER.fullmatch(score[0]) or score[0] in MISSING for score in scores):
+        return None
+    if delta not in MISSING and not NUMBER.fullmatch(delta.rstrip("*")):
+        return None
+    return label, tokens
+
+
+def read_metric_comparison(page: Page, lines: list[str], index: int, cells: list[re.Match[str]],
+                           captions: list[tuple[int, re.Match[str], str]]) -> Table | None:
+    heading, *variants, delta = cells
+    left = heading.start()
+    first_variant = variants[0].start()
+    nearby = [(at, match, caption) for at, match, caption in captions
+              if index - 6 <= at and left - 6 <= match.start(1) < delta.end()]
+    before = next((item for item in reversed(nearby) if item[0] < index and item[1].start(1) <= left + 4), None)
+    if before:
+        at = before[0]
+        # A comparison grid directly above this caption owns it as a footer.
+        if any(read_metric_row(line, left, first_variant) for line in lines[max(0, at - 3):at]):
+            before = None
+    after = next((item for item in nearby if item[0] > index), None)
+    entries = []
+    last = index
+    stop = after[0] if after else len(lines)
+    for at in range(index + 1, stop):
+        row = read_metric_row(lines[at], left, first_variant)
+        if row is None:
+            if at - last > 1:
+                break
+            continue
+        entries.append(row)
+        last = at
+    caption = before or (after if after and after[0] - last <= 3 else None)
+    if len(entries) < 2 or not caption:
+        return None
+    if len(variants) == 1:
+        # Poppler can reduce a column separator to one space. A unique break
+        # past the first numeric column's center and near its right edge is required.
+        merged = variants[0]
+        left_center = median((tokens[0].start() + tokens[0].end()) / 2 for _, tokens in entries)
+        right_edge = median(tokens[0].end() for _, tokens in entries)
+        breaks = [gap for gap in re.compile(r" ").finditer(merged.string, merged.start(), merged.end())
+                  if gap.end() > left_center and abs(gap.end() - right_edge) <= 2]
+        if len(breaks) != 1:
+            return None
+        gap = breaks[0]
+        variants = [
+            HEADER_CELLS.search(merged.string, merged.start(), gap.start()),
+            HEADER_CELLS.search(merged.string, gap.end(), merged.end()),
+        ]
+    variant_names = [variant[0] for variant in variants]
+    if not distinct_labels(variant_names):
+        return None
+    if any(not in_column(token, heading) for _, tokens in entries
+           for token, heading in zip(tokens, [*variants, delta], strict=True)):
+        return None
+
+    columns = []
+    results = [[], []]
+    for label, tokens in entries:
+        values = [token[0] for token in tokens[:2]]
+        # The value reader treats commas as decimal separators.
+        if any(GROUPED_NUMBER.fullmatch(value) for value in values):
+            continue
+        unit = METRIC_UNIT.search(label[0])
+        name = label[0][:unit.start()] if unit else label[0]
+        header = Header(label[0], name, (label.start() + label.end()) / 2, None, unit[1] if unit else None)
+        columns.append(Column(header, None, original_row=label[0]))
+        for result, value in zip(results, values, strict=True):
+            result.append(value)
+    if not columns or not distinct_labels([column.header.label for column in columns]):
+        return None
+    _, match, text = caption
+    rows = list(zip(variant_names, results, strict=True))
+    return Table(page, match[1], text, index, columns, rows)
 
 
 def read_transposed_tables(page: Page, lines: list[str], captions: list[tuple[int, re.Match[str]]],

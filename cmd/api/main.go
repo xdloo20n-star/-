@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
@@ -62,8 +63,17 @@ func run(logger *slog.Logger) error {
 		extractors = append(extractors, cfg.python)
 	}
 	app := api.New(cfg.api, db, importer, logger, extractors...)
+	site, err := fs.Sub(sverka.WebAssets, "web")
+	if err != nil {
+		return fmt.Errorf("open embedded frontend: %w", err)
+	}
+	mux := http.NewServeMux()
+	apiHandler := app.Handler()
+	mux.Handle("/api/", apiHandler)
+	mux.Handle("/healthz", apiHandler)
+	mux.Handle("/", http.FileServerFS(site))
 	server := &http.Server{
-		Handler:           app.Handler(),
+		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      60 * time.Second,

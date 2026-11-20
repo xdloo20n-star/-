@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#142036">
+  <title>Сверка</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#workspace">К рабочей области</a>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#documents">
+        <span class="brand-mark" aria-hidden="true"></span>
+        Сверка
+      </a>
+      <nav class="primary-nav" aria-label="Рабочие разделы">
+        <a id="nav-documents" href="#documents">Документы</a>
+        <a id="nav-results" href="#results">Результаты</a>
+      </nav>
+      <button id="export-all" class="button button-nav" type="button">Экспорт JSON</button>
+    </div>
+  </header>
+  <main id="workspace" class="workspace" tabindex="-1" aria-busy="true">
+    <div class="screen-heading"><h1 tabindex="-1">Документы</h1></div>
+    <p class="panel state" role="status">Загружаем рабочую область…</p>
+    <noscript><p class="panel state">Включите JavaScript, чтобы загрузить PDF и просматривать результаты.</p></noscript>
+  </main>
+  <aside id="compare-tray" class="compare-tray" aria-label="Выбор для сравнения" hidden></aside>
+  <div id="notice" class="notice" role="status" aria-live="polite"></div>
+</body>
+</html>

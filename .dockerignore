@@ -1,0 +1,17 @@
+**
+!go.mod
+!go.sum
+!/*.go
+!cmd/
+!internal/
+!docs/extractor.schema.json
+!docs/examples/extractor-mock.json
+!web/
+!extractor/*.py
+
+extractor/test_*.py
+**/.env
+**/.env.*
+**/.git
+**/__pycache__
+**/node_modules

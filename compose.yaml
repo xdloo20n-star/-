@@ -1,0 +1,25 @@
+services:
+  sverka:
+    build: .
+    init: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    ports:
+      - target: ${PORT:-8080}
+        published: "${PORT:-8080}"
+        host_ip: "${SVERKA_BIND_IP:-127.0.0.1}"
+    environment:
+      PORT: "${PORT:-8080}"
+      CORS_ORIGIN: "${CORS_ORIGIN-http://localhost:5173}"
+      MAX_PDF_BYTES: "${MAX_PDF_BYTES:-33554432}"
+      EXTRACTION_MODE: "${EXTRACTION_MODE:-python}"
+      EXTRACT_TIMEOUT: "${EXTRACT_TIMEOUT:-5m}"
+      PYTHON_BIN: "${PYTHON_BIN:-python3}"
+      PYTHON_SCRIPT: "${PYTHON_SCRIPT:-/app/extractor/main.py}"
+      TESSERACT_BIN: "${TESSERACT_BIN:-tesseract}"
+      OCR_LANG: "${OCR_LANG:-eng}"
+    volumes:
+      - sverka-data:/data
+
+volumes:
+  sverka-data:

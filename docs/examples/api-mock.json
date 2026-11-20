@@ -137,6 +137,9 @@
     "experiment": {
       "experiment_id": "exp_runs",
       "evaluation_protocol": "Mean recall across the same 100 queries, with document-level relevance labels",
+      "instrument": "Synthetic evaluation harness",
+      "instrument_characteristics": "Fixed set of 100 queries with document-level relevance labels",
+      "measurement_conditions": "Same held-out test split and query set for both configurations",
       "sample_size": 100
     },
     "evidence": [
@@ -179,7 +182,10 @@
       { "criterion": "metric_k", "status": "match", "message": "Для обоих результатов k=5." },
       { "criterion": "scale", "status": "match", "message": "Обе исходные шкалы указаны и пересчитываются в долю." },
       { "criterion": "aggregation", "status": "match", "message": "Оба результата усреднены." },
-      { "criterion": "evaluation_protocol", "status": "match", "message": "Результаты получены по одному протоколу оценки." }
+      { "criterion": "evaluation_protocol", "status": "match", "message": "Результаты получены по одному протоколу оценки." },
+      { "criterion": "instrument", "status": "match", "message": "Прибор или измерительная система совпадает." },
+      { "criterion": "instrument_characteristics", "status": "match", "message": "Характеристики прибора совпадают." },
+      { "criterion": "measurement_conditions", "status": "match", "message": "Условия измерения совпадают." }
     ],
     "numeric": { "left_value": 0.52, "right_value": 0.6, "delta": 0.08, "unit": "fraction", "preferred": "right" }
   },

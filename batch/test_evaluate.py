@@ -59,6 +59,11 @@ class SourceKeyTests(unittest.TestCase):
         self.assertEqual(benchmark.source_key(result("a", metric_name="ROUGE-1")),
                          benchmark.source_key(result("b", metric_name="ROUGE_1")))
 
+    def test_percent_in_cell_and_percent_in_column_unit_have_same_source_value(self):
+        cell = result("cell", raw_value="24.8%", raw_unit="%")
+        headed = result("headed", raw_value="24.8", raw_unit="%")
+        self.assertEqual(benchmark.source_key(cell), benchmark.source_key(headed))
+
     def test_preserves_sign_scale_cutoff_variant_and_source_type(self):
         for first, second in (
             ({"raw_value": "-0.0"}, {"raw_value": "0"}),

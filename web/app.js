@@ -72,7 +72,7 @@ function endpoint(resource, id) {
 
 function routeBack(params) {
   const target = params.get("from");
-  return /^#results(?:\?|$)/.test(target ?? "") ? target : "#results";
+  return /^#(?:results|groups)(?:\?|$)/.test(target ?? "") ? target : "#results";
 }
 
 function withQuery(path, query) {
@@ -586,6 +586,45 @@ function showResults(screen, params) {
   if (id) loadScope();
 }
 
+function showGroups(screen) {
+  const content = element("div", "groups-content");
+  WORKSPACE.append(screenHeading("Сопоставимые группы"),
+    element("p", "muted", "Здесь собраны результаты разных публикаций с совпавшими условиями измерения. Граф связей между статьями не строится."), content);
+  async function load() {
+    content.replaceChildren(statePanel("Подбираем группы…", null, null, "loading"));
+    try {
+      const { groups } = await request("/groups", { signal: screen.signal });
+      if (screen.signal.aborted) return;
+      if (!groups.length) {
+        content.replaceChildren(statePanel("Пока нет подтверждённых межстатейных групп",
+          "Для объединения нужны заполненные и совпадающие сведения о приборе, его характеристиках, условиях измерения и остальных критериях сравнения.",
+          link("К документам", "#documents", "button button-secondary")));
+        return;
+      }
+      content.replaceChildren(...groups.map((group) => {
+        const entries = group.results.map((item) => element("li", "group-result",
+          link(item.publication_title || item.publication_id,
+            resultRoute(item.result_id, "#groups"), "metric-link"),
+          element("span", "muted", `${item.configuration_name || UNKNOWN} · ${item.dataset_name || UNKNOWN} · ${item.metric_name}`),
+          element("span", "mono", item.normalized ? measured(item.normalized) : item.raw_value || UNKNOWN)));
+        const members = element("ul", "group-results", ...entries);
+        const first = group.results[0];
+        const second = group.results.find((item) => item.publication_id !== first.publication_id);
+        return element("section", "panel group-card",
+          element("div", "section-heading", element("div", "section-title",
+            element("h2", "", first.metric_name), element("span", "section-count", `${group.results.length} результатов`))),
+          element("p", "muted", `${first.dataset_name || UNKNOWN} · ${group.group_id}`), members,
+          second ? link("Сравнить две статьи", route("compare", {
+            left: first.result_id, right: second.result_id, from: "#groups",
+          }), "button button-secondary") : null);
+      }));
+    } catch (error) {
+      if (!screen.signal.aborted) loadFailure(content, "Не удалось загрузить группы", error, load);
+    }
+  }
+  load();
+}
+
 function extractionLabel(status) {
   return { absent: "В статье не указано", present_not_extractable: "Не удалось извлечь" }[status];
 }
@@ -931,6 +970,9 @@ const CRITERION_LABELS = {
   task: "Задача", dataset: "Датасет", dataset_version: "Версия датасета", data_split: "Разбиение выборки",
   metric_definition: "Определение метрики", metric_k: "Параметр K", scale: "Шкала", aggregation: "Агрегация",
   evaluation_protocol: "Протокол оценки",
+  instrument: "Прибор или измерительная система",
+  instrument_characteristics: "Характеристики прибора",
+  measurement_conditions: "Условия измерения",
 };
 const CRITERION_STYLES = {
   match: ["success", "Совпадает"], mismatch: ["error", "Различается"], missing: ["warning", "Нет сведений"],
@@ -1022,7 +1064,8 @@ function showComparison(screen, params) {
 
 const SCREENS = {
   documents: { render: showDocuments, title: "Документы" }, document: { render: showDocument, title: "Статус документа" },
-  results: { render: showResults, title: "Результаты" }, result: { render: showResult, title: "Результат" },
+  results: { render: showResults, title: "Результаты" }, groups: { render: showGroups, title: "Сопоставимые группы" },
+  result: { render: showResult, title: "Результат" },
   compare: { render: showComparison, title: "Сравнение результатов" },
 };
 
@@ -1040,10 +1083,14 @@ function renderScreen(focus) {
   if (name === "result") currentScreen.resultsBack = routeBack(params);
   document.title = `${SCREENS[name].title} · Сверка`;
   const documents = name === "documents" || name === "document";
+  const groups = name === "groups";
+  const results = !documents && !groups;
   document.querySelector("#nav-documents").toggleAttribute("data-current", documents);
-  document.querySelector("#nav-results").toggleAttribute("data-current", !documents);
+  document.querySelector("#nav-results").toggleAttribute("data-current", results);
+  document.querySelector("#nav-groups").toggleAttribute("data-current", groups);
   document.querySelector("#nav-documents").setAttribute("aria-current", documents ? "location" : "false");
-  document.querySelector("#nav-results").setAttribute("aria-current", !documents ? "location" : "false");
+  document.querySelector("#nav-results").setAttribute("aria-current", results ? "location" : "false");
+  document.querySelector("#nav-groups").setAttribute("aria-current", groups ? "location" : "false");
   WORKSPACE.replaceChildren();
   SCREENS[name].render(currentScreen, params);
   WORKSPACE.removeAttribute("aria-busy");

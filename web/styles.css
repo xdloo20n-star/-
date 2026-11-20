@@ -126,6 +126,9 @@ button.text-link { padding: 0; border: 0; background: transparent; text-decorati
 .upload-status:not(:empty) { margin-top: 8px; overflow-wrap: anywhere; }
 .upload-panel > .button { min-width: 128px; }
 .document-list, .issue-list, .criteria-list { list-style: none; margin: 0; padding: 0; }
+.group-results { list-style: none; margin: 12px 0 16px; padding: 0; }
+.group-result { display: grid; grid-template-columns: minmax(180px, 1.2fr) minmax(180px, 1fr) auto; gap: 8px 16px; align-items: baseline; padding: 11px 0; border-top: 1px solid var(--line); }
+.group-card { margin-bottom: 14px; }
 .document-row {
   display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto; align-items: center;
   gap: 12px 20px; padding: 17px clamp(14px, 2.2vw, 24px);
@@ -333,6 +336,7 @@ body.has-tray { padding-bottom: 90px; }
 }
 
 @media (max-width: 680px) {
+  .group-result { grid-template-columns: 1fr; gap: 4px; }
   .topbar-inner { min-height: 0; gap: 0 12px; grid-template-columns: 1fr auto; }
   .brand { margin-block: 14px; }
   .button-nav { grid-column: 2; grid-row: 1; min-height: 34px; padding-inline: 9px; font-size: .82rem; }

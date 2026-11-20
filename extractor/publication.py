@@ -18,6 +18,7 @@ ORIGIN_CITATION = re.compile(
 UNSOURCED_QUOTATION = re.compile(r"(?:results?|scores?|values?)\s+(?:were\s+)?(?:taken|copied|reproduced)\s+from\b", re.I)
 TASK_TYPE = re.compile(r"\b(?:question[\s-]+answering|answering\s+questions)\b", re.I)
 SPLIT = re.compile(r"\b(validation|test(?:ing)?|train(?:ing)?|dev(?:elopment)?)\s+(?:split|set)s?\b", re.I)
+CAPTION_CUTOFF = re.compile(r"\b(?:at|with)\s+k\s*=\s*(\d+)\b", re.I)
 PUBLICATION_ID = re.compile(r"[DP]\s*[\dO]\s*[\dO]\s*[\dO](?:\s*\.\s*pdf)?", re.I)
 TEMPLATE_TITLE = re.compile(r"^Microsoft Word\s*-|^Paper Title \(use style: paper title\)$", re.I)
 RUNNING_HEAD = re.compile(
@@ -51,11 +52,24 @@ UNIT_TEXT = r"%|percent(?:ages?)?|fractions?|ms|s|sec|seconds?|milliseconds?"
 UNIT_STATEMENT = r"(?:are|is|were)\s+(?:(?:reported|expressed|measured)\s+)?(?:in|as)\s+(?:an?\s+)?"
 CONTRAST = re.compile(r"\b(?:except|unlike|whereas|rather than|instead of|but)\b", re.I)
 METRIC_VARIANTS = (
+    (re.compile(r"\bexact\s+match\b.{0,180}\bstandard\s+text\s+normalization\b", re.I | re.S),
+     {"em", "exact match"}, "exact match after standard text normalization"),
+    (re.compile(r"\btoken[-\s]+level\s+overlap\b.{0,180}\bstandard\s+text\s+normalization\b", re.I | re.S),
+     {"f1"}, "token-level overlap after standard text normalization"),
     (re.compile(r"\bnormalized\s+exact\s+match\b", re.I), {"em", "exact match"}, "normalized exact match"),
     (re.compile(r"\bword[\s-]+level\s+f1(?:[\s-]+score)?\b", re.I), {"f1"}, "word-level"),
     (re.compile(r"\btoken[\s-]+level\s+f1(?:[\s-]+score)?\b", re.I), {"f1"}, "token-level"),
     (re.compile(r"\bmacro(?:[\s-]+averaged)?[\s-]+f1\b", re.I), {"f1"}, "macro"),
     (re.compile(r"\bmicro(?:[\s-]+averaged)?[\s-]+f1\b", re.I), {"f1"}, "micro"),
+)
+METRIC_NAME_ALIASES = (
+    (re.compile(r"^entity match$", re.I), re.compile(r"\bEntity Match Rate\b", re.I), "Entity Match Rate"),
+    (re.compile(r"^sent-int\s+σ$", re.I), re.compile(r"\bSentiment[- ]Intensity\s+σ\b", re.I), "Sentiment-Intensity sigma"),
+    (re.compile(r"^biz impact\s+σ$", re.I), re.compile(r"\bBusiness Impact\s+σ\b", re.I), "Business Impact sigma"),
+    (re.compile(r"^emot\.? markers$", re.I), re.compile(r"\bEmotional Markers\b", re.I), "Emotional Markers"),
+    (re.compile(r"^revenue band$", re.I), re.compile(r"\bDemographic Coverage\b.{0,180}\bRevenue Band\b", re.I | re.S), "Revenue Band Coverage"),
+    (re.compile(r"^tenure$", re.I), re.compile(r"\bDemographic Coverage\b.{0,180}\bTenure\b", re.I | re.S), "Tenure Coverage"),
+    (re.compile(r"^evidence$", re.I), re.compile(r"\bDemographic Coverage\b.{0,180}\bEvidence Type\b", re.I | re.S), "Evidence Type Coverage"),
 )
 
 
@@ -311,6 +325,15 @@ def metric_variant(column: Column, page: Page) -> str | None:
     return metric_definition(column, [page.reading_text or page.text])[0]
 
 
+def metric_name_alias(column: Column, page: Page) -> tuple[str | None, str | None]:
+    source = page.reading_text or page.text
+    matches = []
+    for header, context, canonical in METRIC_NAME_ALIASES:
+        if header.fullmatch(column.header.name.strip()) and (match := context.search(source)):
+            matches.append((canonical, match[0]))
+    return unique_context(matches)
+
+
 def metric_unit(column: Column, fragments: list[str]) -> tuple[str | None, str | None]:
     name = column.header.name.lower()
     metric = r"\s+".join(re.escape(word) for word in name.split())
@@ -348,11 +371,16 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
     split, split_fragment = unique_context(splits)
     qa = question_answering or bool(TASK_TYPE.search(table.page.prose))
     page_tables = page_tables or [table]
+    caption_cutoff = CAPTION_CUTOFF.search(table.caption)
+    table_cutoff = int(caption_cutoff[1]) if caption_cutoff else None
     protocol_fragment = next((match[0] for fragment in explicit + (general if len(page_tables) == 1 else [])
                               if not CONTRAST.search(fragment) and (match := RAGAS_PROTOCOL.search(fragment))), None)
     column_context = {}
+    column_names = {}
     for column in table.columns:
         name = column.header.name.casefold()
+        if name not in column_names:
+            column_names[name] = metric_name_alias(column, table.page)
         if name in column_context:
             continue
         matching_tables = sum(any(c.header.name.casefold() == name for c in candidate.columns)
@@ -408,9 +436,10 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
                 direction = "higher_is_better"
             result_id = payload.add(
                 "results", "result_id", "result", experiment_id=experiment_id, config_id=config_id,
-                dataset_id=dataset_id, task_id=task_id, metric_name=header.name,
+                dataset_id=dataset_id, task_id=task_id, metric_name=column_names[header.name.casefold()][0] or header.name,
                 metric_variant=variant, metric_direction=direction,
-                metric_k=header.cutoff, metric_k_applicability="applicable" if header.cutoff is not None else "not_applicable",
+                metric_k=header.cutoff if header.cutoff is not None else table_cutoff,
+                metric_k_applicability="applicable" if header.cutoff is not None or table_cutoff is not None else "not_applicable",
                 reported_value=value, reported_scale=scale, raw_value=raw, raw_unit=unit,
                 aggregation=column.aggregation, result_origin=origin,
                 cited_publication_id=citation[1] if citation else None, extraction_status=status,
@@ -422,6 +451,10 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
                          table_row=column.original_row or row, table_column=column_title, **source)
             if variant_fragment:
                 payload.cite("result", result_id, "metric_variant", table.page, variant_fragment,
+                             table_column=column_title, **source)
+            alias, alias_fragment = column_names[header.name.casefold()]
+            if alias and alias_fragment:
+                payload.cite("result", result_id, "metric_name", table.page, alias_fragment,
                              table_column=column_title, **source)
             if unit_fragment and not header.unit and not raw.endswith("%"):
                 payload.cite("result", result_id, "raw_unit", table.page, unit_fragment,

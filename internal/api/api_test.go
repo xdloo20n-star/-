@@ -321,3 +321,47 @@ print(%q)
 		equal(t, "Python failed data", (*model.DocumentData)(nil), failed.Data)
 	}
 }
+
+func TestComparableGroupsEndpointReturnsEmptyListWithoutEligibleCrossPublicationPairs(t *testing.T) {
+	h := newHarness(t, testExtractor(func(context.Context, string) ([]byte, error) {
+		return sverka.MockExtraction, nil
+	}), time.Second)
+	response := decode[struct {
+		Groups []model.ComparableGroup `json:"groups"`
+	}](t, request(t, http.MethodGet, h.url+"/api/v1/groups", "", nil, http.StatusOK))
+	equal(t, "empty comparable groups", 0, len(response.Groups))
+}
+
+func TestComparableGroupsEndpointGroupsResultsFromDistinctPublications(t *testing.T) {
+	source := testExtractor(func(_ context.Context, path string) ([]byte, error) {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		title := "Paper A"
+		if bytes.Contains(content, []byte("paper-b")) {
+			title = "Paper B"
+		}
+		return bytes.Replace(sverka.MockExtraction,
+			[]byte("Сверка — синтетическая оценка поиска"), []byte(title), 1), nil
+	})
+	h := newHarness(t, source, time.Second)
+	h.startWorker(t)
+	first := decode[model.Document](t, upload(t, h, "%PDF-1.7\npaper-a", http.StatusAccepted))
+	second := decode[model.Document](t, upload(t, h, "%PDF-1.7\npaper-b", http.StatusAccepted))
+	waitFor(t, h, first.ID, model.Completed)
+	waitFor(t, h, second.ID, model.Completed)
+	response := decode[struct {
+		Groups []model.ComparableGroup `json:"groups"`
+	}](t, request(t, http.MethodGet, h.url+"/api/v1/groups", "", nil, http.StatusOK))
+	if len(response.Groups) != 1 || len(response.Groups[0].Results) != 4 {
+		t.Fatalf("two publications with two matching configurations expected one four-result group, got: %+v", response.Groups)
+	}
+	configurations := map[string]bool{}
+	for _, result := range response.Groups[0].Results {
+		configurations[result.ConfigurationName] = true
+	}
+	if !configurations["Dense"] || !configurations["Hybrid"] {
+		t.Fatalf("group configuration names expected Dense and Hybrid, got: %+v", configurations)
+	}
+}

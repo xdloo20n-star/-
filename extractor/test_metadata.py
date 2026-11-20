@@ -60,6 +60,57 @@ class TableContextTest(unittest.TestCase):
         self.assertIn(("data_split", caption), [(e["field"], e["fragment"]) for e in payload.evidence])
         self.assertIn(("metric_variant", definition), [(e["field"], e["fragment"]) for e in payload.evidence])
 
+    def test_text_normalization_definition_is_attached_to_matching_metrics(self):
+        caption = "Table 1: Main results on the HotpotQA test set."
+        definition = ("For evaluation, we report Exact Match (EM) and F1 scores to measure absolute correctness "
+                      "and token-level overlap, applying standard text normalization to both predictions and gold answers.")
+        page = Page(6, f"{caption}\nMethod       EM     F1\nSystem       .42    .53", "text_match", definition)
+        columns = [Column(Header(name, name, center, None, None), "HotpotQA")
+                   for name, center in (("EM", 14), ("F1", 21))]
+        table = Table(page, "Table 1", caption, 0, columns, [("System", [".42", ".53"])])
+        payload = Payload({}, {})
+        add_table(payload, table, True)
+        self.assertEqual([result["metric_variant"] for result in payload.results], [
+            "exact match after standard text normalization",
+            "token-level overlap after standard text normalization",
+        ])
+        self.assertEqual([e["fragment"] for e in payload.evidence if e["field"] == "metric_variant"],
+                         [definition, definition])
+
+    def test_explicit_table_cutoff_is_attached_to_each_result(self):
+        caption = "Table 2: Diversity metrics at k=20 (hybrid retrieval, forums dataset)."
+        page = Page(6, f"{caption}\nRaw KB       24.8\nEnriched KB   35.4", "text_match")
+        table = Table(page, "Table 2", caption, 0,
+                      [Column(Header("Entity Match", "Entity Match", 0, None, "%"), "Forums")],
+                      [("Raw KB", ["24.8"]), ("Enriched KB", ["35.4"])])
+        payload = Payload({}, {})
+        add_table(payload, table, True)
+        self.assertEqual([result["metric_k"] for result in payload.results], [20, 20])
+        self.assertEqual([result["metric_k_applicability"] for result in payload.results], ["applicable"] * 2)
+
+    def test_abbreviated_metrics_expand_only_when_the_page_defines_them(self):
+        caption = "Table 2: Diversity metrics at k=20 (hybrid retrieval, forums dataset)."
+        definitions = ("Entity Match Rate: fraction of retrieved documents that mention the queried entity. "
+                       "Sentiment-Intensity σ and Business Impact σ measure diversity. "
+                       "Emotional Markers count distinct markers. Demographic Coverage includes Revenue Band, "
+                       "Tenure and Evidence Type.")
+        page = Page(6, f"{caption}\nRaw KB 24.8 9.12 10.55 7.2 78.3 81.2 44.3",
+                    "text_match", f"{definitions}\n{caption}")
+        labels = ["Entity Match", "Sent-Int σ", "Biz Impact σ", "Emot. Markers",
+                  "Revenue Band", "Tenure", "Evidence"]
+        columns = [Column(Header(label, label, 10 + 10 * i, None, None), "Forums")
+                   for i, label in enumerate(labels)]
+        table = Table(page, "Table 2", caption, 0, columns,
+                      [("Raw KB", ["24.8", "9.12", "10.55", "7.2", "78.3", "81.2", "44.3"])])
+        payload = Payload({}, {})
+        add_table(payload, table, True)
+        self.assertEqual([result["metric_name"] for result in payload.results], [
+            "Entity Match Rate", "Sentiment-Intensity sigma", "Business Impact sigma",
+            "Emotional Markers", "Revenue Band Coverage", "Tenure Coverage", "Evidence Type Coverage",
+        ])
+        self.assertTrue(all(result["metric_k"] == 20 for result in payload.results))
+        self.assertEqual(sum(e["field"] == "metric_name" for e in payload.evidence), 7)
+
     def test_named_table_context_does_not_transfer_to_table_with_same_metric(self):
         captions = ["Table 1: Corpus comparison.", "Table 10: Corpus comparison."]
         evaluation = "In Table 1, macro-averaged F1 is reported as a percentage and evaluated using RAGAS."

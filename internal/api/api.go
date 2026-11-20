@@ -63,6 +63,7 @@ func (s *Server) Handler() http.Handler {
 	get("/api/v1/documents/{id}/file", s.documentFile)
 	get("/api/v1/results", s.listResults)
 	get("/api/v1/results/{id}", s.result)
+	get("/api/v1/groups", s.comparableGroups)
 	route(mux, "/api/v1/comparisons", map[string]http.HandlerFunc{http.MethodPost: s.comparison})
 	get("/api/v1/export", s.export)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

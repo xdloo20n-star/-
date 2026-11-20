@@ -118,6 +118,21 @@ paths:
               schema: {$ref: '#/components/schemas/ResultDetail'}
         '404': {$ref: '#/components/responses/Error'}
         default: {$ref: '#/components/responses/Error'}
+  /api/v1/groups:
+    get:
+      operationId: listComparableGroups
+      description: Returns cross-publication result groups only when every pair passes the comparison rules. No publication relationship graph is produced.
+      responses:
+        '200':
+          description: Confirmed comparable groups, ordered by stable group ID
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [groups]
+                properties:
+                  groups: {type: array, items: {$ref: '#/components/schemas/ComparableGroup'}}
+        default: {$ref: '#/components/responses/Error'}
   /api/v1/comparisons:
     post:
       operationId: compareResults
@@ -313,9 +328,32 @@ components:
       required: [criterion, status, message]
       properties:
         criterion:
-          enum: [task, dataset, dataset_version, data_split, metric_definition, metric_k, scale, aggregation, evaluation_protocol]
+          enum: [task, dataset, dataset_version, data_split, metric_definition, metric_k, scale, aggregation, evaluation_protocol, instrument, instrument_characteristics, measurement_conditions]
         status: {enum: [match, mismatch, missing, not_applicable]}
         message: {type: string, minLength: 1}
+    GroupResult:
+      type: object
+      required: [result_id, document_id, publication_id, publication_title, dataset_name, configuration_name, metric_name, raw_value, normalized]
+      properties:
+        result_id: {$ref: '#/components/schemas/ID'}
+        document_id: {$ref: '#/components/schemas/ID'}
+        publication_id: {$ref: '#/components/schemas/ID'}
+        publication_title: {type: string}
+        dataset_name: {type: string}
+        configuration_name: {type: string}
+        metric_name: {type: string}
+        raw_value: {type: string}
+        normalized:
+          anyOf:
+            - {$ref: '#/components/schemas/MeasuredValue'}
+            - {type: 'null'}
+    ComparableGroup:
+      type: object
+      required: [group_id, criteria, results]
+      properties:
+        group_id: {$ref: '#/components/schemas/ID'}
+        criteria: {type: array, items: {$ref: '#/components/schemas/Criterion'}}
+        results: {type: array, minItems: 2, items: {$ref: '#/components/schemas/GroupResult'}}
     Comparison:
       type: object
       required: [left_result_id, right_result_id, left_extraction_mode, right_extraction_mode, status, criteria, numeric]

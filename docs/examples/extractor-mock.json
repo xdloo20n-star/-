@@ -20,7 +20,14 @@
   ],
   "tasks": [{ "task_id": "retrieve", "task_type": "evidence retrieval" }],
   "experiments": [
-    { "experiment_id": "runs", "evaluation_protocol": "Mean recall across the same 100 queries, with document-level relevance labels", "sample_size": 100 }
+    {
+      "experiment_id": "runs",
+      "evaluation_protocol": "Mean recall across the same 100 queries, with document-level relevance labels",
+      "instrument": "Synthetic evaluation harness",
+      "instrument_characteristics": "Fixed set of 100 queries with document-level relevance labels",
+      "measurement_conditions": "Same held-out test split and query set for both configurations",
+      "sample_size": 100
+    }
   ],
   "results": [
     {

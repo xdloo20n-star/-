@@ -88,13 +88,16 @@ def locator_key(value, prefix):
 
 def source_key(row):
     value = raw_key(row["raw_value"])
+    unit = literal(row["raw_unit"])
+    if value.endswith("%") and label(unit) in {"%", "percent"}:
+        value = value[:-1]
     metric = metric_key(row)
     page = unsigned_integer(literal(row["source_page"]))
     table = locator_key(row["source_table"], TABLE_PREFIX)
     figure = locator_key(row["source_figure"], FIGURE_PREFIX)
     if not value or metric is None or page in (None, "0") or not (table or figure):
         return None
-    return value, literal(row["raw_unit"]), metric, page, table, figure
+    return value, unit, metric, page, table, figure
 
 
 def indexed_csv(open_csv, table, id_field, fields, *, optional=False):

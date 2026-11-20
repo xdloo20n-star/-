@@ -134,6 +134,13 @@ func Compare(left, right ResultDetail) Comparison {
 			compareText("evaluation_protocol", "Протокол оценки", left.Experiment.Text("evaluation_protocol"), right.Experiment.Text("evaluation_protocol")),
 		},
 	}
+	if differentPublications(left, right) {
+		comparison.Criteria = append(comparison.Criteria,
+			compareInstrument(left.Experiment, right.Experiment),
+			compareText("instrument_characteristics", "Характеристики прибора", left.Experiment.Text("instrument_characteristics"), right.Experiment.Text("instrument_characteristics")),
+			compareText("measurement_conditions", "Условия измерения", left.Experiment.Text("measurement_conditions"), right.Experiment.Text("measurement_conditions")),
+		)
+	}
 	for _, criterion := range comparison.Criteria {
 		switch {
 		case criterion.Status == "mismatch":
@@ -155,6 +162,48 @@ func Compare(left, right ResultDetail) Comparison {
 		Unit: left.Normalized.Unit, Preferred: preferredSide(delta, left.Result, right.Result),
 	}
 	return comparison
+}
+
+func compareInstrument(left, right Record) Criterion {
+	leftID, rightID := key(left.Text("instrument_equivalence_id")), key(right.Text("instrument_equivalence_id"))
+	leftName, rightName := key(left.Text("instrument")), key(right.Text("instrument"))
+	if leftID != "" && rightID != "" {
+		if leftID == rightID {
+			return Criterion{"instrument", "match", "Приборы отмечены как эквивалентные по подтверждённому ID «" + left.Text("instrument_equivalence_id") + "»."}
+		}
+		return Criterion{"instrument", "mismatch", "Подтверждённые ID эквивалентности приборов различаются."}
+	}
+	switch {
+	case leftName == "" || rightName == "":
+		return Criterion{"instrument", "missing", "Прибор или измерительная система не указан для одной или обеих записей."}
+	case leftName != rightName:
+		return Criterion{"instrument", "mismatch", "Приборы различаются; подтверждённого ID эквивалентности нет."}
+	default:
+		return Criterion{"instrument", "match", "Прибор или измерительная система совпадает: «" + left.Text("instrument") + "»."}
+	}
+}
+
+func differentPublications(left, right ResultDetail) bool {
+	leftDOI, rightDOI := key(left.Publication.Text("doi")), key(right.Publication.Text("doi"))
+	if leftDOI != "" && rightDOI != "" {
+		return normalizeDOI(leftDOI) != normalizeDOI(rightDOI)
+	}
+	leftTitle, rightTitle := key(left.Publication.Text("title")), key(right.Publication.Text("title"))
+	if leftTitle != "" && rightTitle != "" {
+		return leftTitle != rightTitle
+	}
+	leftID, rightID := left.Publication.Text("publication_id"), right.Publication.Text("publication_id")
+	if leftID != "" && rightID != "" {
+		return leftID != rightID
+	}
+	return left.DocumentID != right.DocumentID
+}
+
+func normalizeDOI(value string) string {
+	for _, prefix := range []string{"https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "doi.org/", "doi:"} {
+		value = strings.TrimPrefix(value, prefix)
+	}
+	return strings.TrimRight(strings.TrimSpace(value), ".,; ")
 }
 
 func compareText(name, label, left, right string) Criterion {

@@ -2,3 +2,4 @@
 /.env
 /sverka-api
 /sverka-contracts.zip
+__pycache__/

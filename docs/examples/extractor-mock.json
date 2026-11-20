@@ -1,0 +1,105 @@
+{
+  "schema_version": "1.0",
+  "extraction_mode": "mock",
+  "document": { "page_count": 4, "unreadable_pages": [] },
+  "publication": {
+    "publication_id": "pub",
+    "title": "PaperTrace synthetic retrieval evaluation",
+    "year": null,
+    "doi": null,
+    "authors": null,
+    "in_scope": true,
+    "exclusion_reason": null
+  },
+  "configurations": [
+    { "config_id": "dense", "rag_variant": "Dense", "retrieval_method": "dense", "top_k": 10 },
+    { "config_id": "hybrid", "rag_variant": "Hybrid", "retrieval_method": "hybrid", "top_k": 10 }
+  ],
+  "datasets": [
+    { "dataset_id": "example", "dataset_name": "SyntheticQA", "dataset_version": "v1", "data_split": "test" }
+  ],
+  "tasks": [{ "task_id": "retrieve", "task_type": "evidence retrieval" }],
+  "experiments": [
+    { "experiment_id": "runs", "evaluation_protocol": "Mean recall across the same 100 queries, with document-level relevance labels", "sample_size": 100 }
+  ],
+  "results": [
+    {
+      "result_id": "recall-dense",
+      "experiment_id": "runs",
+      "config_id": "dense",
+      "dataset_id": "example",
+      "task_id": "retrieve",
+      "metric_group": "retrieval",
+      "metric_name": "Recall@5",
+      "metric_variant": "document-level",
+      "metric_direction": "higher_is_better",
+      "metric_k": 5,
+      "metric_k_applicability": "applicable",
+      "reported_value": 0.52,
+      "reported_scale": "fraction",
+      "raw_value": "0.52",
+      "raw_unit": null,
+      "aggregation": "mean",
+      "result_origin": "primary",
+      "cited_publication_id": null,
+      "extraction_status": "extracted"
+    },
+    {
+      "result_id": "recall-hybrid",
+      "experiment_id": "runs",
+      "config_id": "hybrid",
+      "dataset_id": "example",
+      "task_id": "retrieve",
+      "metric_group": "retrieval",
+      "metric_name": "Recall@5",
+      "metric_variant": "document-level",
+      "metric_direction": "higher_is_better",
+      "metric_k": 5,
+      "metric_k_applicability": "applicable",
+      "reported_value": 60,
+      "reported_scale": "percent",
+      "raw_value": "60",
+      "raw_unit": "%",
+      "baseline_result_id": "recall-dense",
+      "aggregation": "mean",
+      "result_origin": "primary",
+      "cited_publication_id": null,
+      "extraction_status": "extracted"
+    }
+  ],
+  "evidence": [
+    {
+      "evidence_id": "dense-cell",
+      "entity_type": "result",
+      "entity_id": "recall-dense",
+      "field": "raw_value",
+      "page": 3,
+      "fragment": "Dense 0.52",
+      "table": "Table 2",
+      "table_row": "Dense",
+      "table_column": "Recall@5 (fraction)",
+      "verification": "unverified"
+    },
+    {
+      "evidence_id": "hybrid-cell",
+      "entity_type": "result",
+      "entity_id": "recall-hybrid",
+      "field": "raw_value",
+      "page": 3,
+      "fragment": "Hybrid 60",
+      "table": "Table 2",
+      "table_row": "Hybrid",
+      "table_column": "Recall@5 (%)",
+      "verification": "unverified"
+    },
+    {
+      "evidence_id": "dense-top-k",
+      "entity_type": "configuration",
+      "entity_id": "dense",
+      "field": "top_k",
+      "page": 2,
+      "fragment": "Dense retrieval returns ten documents.",
+      "verification": "unverified"
+    }
+  ]
+}

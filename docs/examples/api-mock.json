@@ -1,0 +1,189 @@
+{
+  "document_accepted": {
+    "document_id": "doc_demo",
+    "original_filename": "synthetic-demo.pdf",
+    "corpus_id": null,
+    "status": "queued",
+    "extraction_mode": "mock",
+    "failure": null,
+    "file_url": "/api/v1/documents/doc_demo/file",
+    "uploaded_at": "2026-11-20T13:00:00Z"
+  },
+  "document_processing": {
+    "document": {
+      "document_id": "doc_demo",
+      "original_filename": "synthetic-demo.pdf",
+      "corpus_id": null,
+      "status": "processing",
+      "extraction_mode": "mock",
+      "failure": null,
+      "file_url": "/api/v1/documents/doc_demo/file",
+      "uploaded_at": "2026-11-20T13:00:00Z"
+    },
+    "data": null
+  },
+  "results": {
+    "items": [
+      {
+        "document_id": "doc_demo",
+        "extraction_mode": "mock",
+        "result": {
+          "result_id": "res_dense",
+          "experiment_id": "exp_runs",
+          "config_id": "cfg_dense",
+          "dataset_id": "data_example",
+          "task_id": "task_retrieve",
+          "metric_group": "retrieval",
+          "metric_name": "Recall@5",
+          "metric_variant": "document-level",
+          "metric_direction": "higher_is_better",
+          "metric_k": 5,
+          "metric_k_applicability": "applicable",
+          "reported_value": 0.52,
+          "reported_scale": "fraction",
+          "raw_value": "0.52",
+          "raw_unit": null,
+          "aggregation": "mean",
+          "result_origin": "primary",
+          "cited_publication_id": null,
+          "extraction_status": "extracted"
+        },
+        "normalized": { "value": 0.52, "unit": "fraction" },
+        "baseline": null,
+        "dataset_name": "SyntheticQA",
+        "task_type": "evidence retrieval",
+        "configuration_name": "Dense",
+        "issue_count": 0
+      },
+      {
+        "document_id": "doc_demo",
+        "extraction_mode": "mock",
+        "result": {
+          "result_id": "res_hybrid",
+          "experiment_id": "exp_runs",
+          "config_id": "cfg_hybrid",
+          "dataset_id": "data_example",
+          "task_id": "task_retrieve",
+          "metric_group": "retrieval",
+          "metric_name": "Recall@5",
+          "metric_variant": "document-level",
+          "metric_direction": "higher_is_better",
+          "metric_k": 5,
+          "metric_k_applicability": "applicable",
+          "reported_value": 60,
+          "reported_scale": "percent",
+          "raw_value": "60",
+          "raw_unit": "%",
+          "baseline_result_id": "res_dense",
+          "aggregation": "mean",
+          "result_origin": "primary",
+          "cited_publication_id": null,
+          "extraction_status": "extracted"
+        },
+        "normalized": { "value": 0.6, "unit": "fraction" },
+        "baseline": { "value": 0.52, "unit": "fraction" },
+        "dataset_name": "SyntheticQA",
+        "task_type": "evidence retrieval",
+        "configuration_name": "Hybrid",
+        "issue_count": 0
+      }
+    ],
+    "page": 1,
+    "page_size": 25,
+    "total": 2
+  },
+  "result": {
+    "document_id": "doc_demo",
+    "extraction_mode": "mock",
+    "result": {
+      "result_id": "res_dense",
+      "experiment_id": "exp_runs",
+      "config_id": "cfg_dense",
+      "dataset_id": "data_example",
+      "task_id": "task_retrieve",
+      "metric_group": "retrieval",
+      "metric_name": "Recall@5",
+      "metric_variant": "document-level",
+      "metric_direction": "higher_is_better",
+      "metric_k": 5,
+      "metric_k_applicability": "applicable",
+      "reported_value": 0.52,
+      "reported_scale": "fraction",
+      "raw_value": "0.52",
+      "raw_unit": null,
+      "aggregation": "mean",
+      "result_origin": "primary",
+      "cited_publication_id": null,
+      "extraction_status": "extracted"
+    },
+    "normalized": { "value": 0.52, "unit": "fraction" },
+    "baseline": null,
+    "dataset_name": "SyntheticQA",
+    "task_type": "evidence retrieval",
+    "configuration_name": "Dense",
+    "issue_count": 0,
+    "publication": {
+      "publication_id": "pub_demo",
+      "title": "PaperTrace synthetic retrieval evaluation",
+      "year": null,
+      "doi": null,
+      "authors": null,
+      "in_scope": true,
+      "exclusion_reason": null
+    },
+    "configuration": { "config_id": "cfg_dense", "rag_variant": "Dense", "retrieval_method": "dense", "top_k": 10 },
+    "dataset": { "dataset_id": "data_example", "dataset_name": "SyntheticQA", "dataset_version": "v1", "data_split": "test" },
+    "task": { "task_id": "task_retrieve", "task_type": "evidence retrieval" },
+    "experiment": {
+      "experiment_id": "exp_runs",
+      "evaluation_protocol": "Mean recall across the same 100 queries, with document-level relevance labels",
+      "sample_size": 100
+    },
+    "evidence": [
+      {
+        "evidence_id": "ev_dense_cell",
+        "entity_type": "result",
+        "entity_id": "res_dense",
+        "field": "raw_value",
+        "page": 3,
+        "fragment": "Dense 0.52",
+        "table": "Table 2",
+        "table_row": "Dense",
+        "table_column": "Recall@5 (fraction)",
+        "verification": "unverified"
+      },
+      {
+        "evidence_id": "ev_dense_top_k",
+        "entity_type": "configuration",
+        "entity_id": "cfg_dense",
+        "field": "top_k",
+        "page": 2,
+        "fragment": "Dense retrieval returns ten documents.",
+        "verification": "unverified"
+      }
+    ],
+    "issues": []
+  },
+  "comparison": {
+    "left_result_id": "res_dense",
+    "right_result_id": "res_hybrid",
+    "left_extraction_mode": "mock",
+    "right_extraction_mode": "mock",
+    "status": "comparable",
+    "criteria": [
+      { "criterion": "task", "status": "match", "message": "У обеих конфигураций задача поиска доказательств." },
+      { "criterion": "dataset", "status": "match", "message": "Обе конфигурации оценены на SyntheticQA." },
+      { "criterion": "dataset_version", "status": "match", "message": "В обоих результатах указана версия v1." },
+      { "criterion": "data_split", "status": "match", "message": "Используется разбиение test." },
+      { "criterion": "metric_definition", "status": "match", "message": "Оба результата используют полноту на уровне документов." },
+      { "criterion": "metric_k", "status": "match", "message": "Для обоих результатов k=5." },
+      { "criterion": "scale", "status": "match", "message": "Обе исходные шкалы указаны и пересчитываются в долю." },
+      { "criterion": "aggregation", "status": "match", "message": "Оба результата усреднены." },
+      { "criterion": "evaluation_protocol", "status": "match", "message": "Результаты получены по одному протоколу оценки." }
+    ],
+    "numeric": { "left_value": 0.52, "right_value": 0.6, "delta": 0.08, "unit": "fraction", "preferred": "right" }
+  },
+  "error": {
+    "error": { "code": "invalid_pdf", "message": "Файл не распознан как PDF." }
+  }
+}

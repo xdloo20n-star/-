@@ -1,0 +1,339 @@
+openapi: 3.1.0
+info:
+  title: PaperTrace HTTP API
+  version: 1.0.0
+servers:
+  - url: http://localhost:8080
+paths:
+  /healthz:
+    get:
+      operationId: health
+      responses:
+        '200':
+          description: Service is accepting requests
+          content:
+            application/json:
+              schema: {type: object, required: [status], properties: {status: {const: ok}}}
+        '503': {$ref: '#/components/responses/Error'}
+  /api/v1/documents:
+    post:
+      operationId: uploadDocument
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: {type: string, format: binary}
+      responses:
+        '202':
+          description: PDF saved and extraction queued
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Document'}
+                  - {properties: {status: {const: queued}}}
+        '400': {$ref: '#/components/responses/Error'}
+        '413': {$ref: '#/components/responses/Error'}
+        '415': {$ref: '#/components/responses/Error'}
+        default: {$ref: '#/components/responses/Error'}
+    get:
+      operationId: listDocuments
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {$ref: '#/components/parameters/PageSize'}
+      responses:
+        '200':
+          description: Most recently uploaded first, breaking ties by document_id descending
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - {properties: {items: {type: array, items: {$ref: '#/components/schemas/Document'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/documents/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    get:
+      operationId: getDocument
+      responses:
+        '200':
+          description: Status and extracted data, if available
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/DocumentDetail'}
+        '404': {$ref: '#/components/responses/Error'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/documents/{id}/file:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    get:
+      operationId: getDocumentFile
+      responses:
+        '200': {$ref: '#/components/responses/Pdf'}
+        '206': {$ref: '#/components/responses/Pdf'}
+        '404': {$ref: '#/components/responses/Error'}
+        '416': {$ref: '#/components/responses/Error'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/results:
+    get:
+      operationId: listResults
+      parameters:
+        - {$ref: '#/components/parameters/Page'}
+        - {$ref: '#/components/parameters/PageSize'}
+        - {$ref: '#/components/parameters/DocumentID'}
+        - {name: dataset_id, in: query, schema: {$ref: '#/components/schemas/ID'}}
+        - {name: task_id, in: query, schema: {$ref: '#/components/schemas/ID'}}
+        - {name: config_id, in: query, schema: {$ref: '#/components/schemas/ID'}}
+        - {name: metric_name, in: query, description: Case-insensitive exact match, schema: {type: string, minLength: 1}}
+        - {name: has_issues, in: query, schema: {type: boolean}}
+        - name: q
+          in: query
+          description: Case-insensitive substring in publication title, metric, dataset, task or configuration name
+          schema: {type: string, minLength: 1}
+      responses:
+        '200':
+          description: Results ordered by result_id ascending
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - {$ref: '#/components/schemas/Page'}
+                  - {properties: {items: {type: array, items: {$ref: '#/components/schemas/ResultSummary'}}}}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/results/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/ID'}
+    get:
+      operationId: getResult
+      responses:
+        '200':
+          description: Metric, related entities, sources and validation issues
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ResultDetail'}
+        '404': {$ref: '#/components/responses/Error'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/comparisons:
+    post:
+      operationId: compareResults
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [left_result_id, right_result_id]
+              properties:
+                left_result_id: {$ref: '#/components/schemas/ID'}
+                right_result_id: {$ref: '#/components/schemas/ID'}
+      responses:
+        '200':
+          description: Comparability decision for the pair, including criteria that could not be evaluated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Comparison'}
+        '400': {$ref: '#/components/responses/Error'}
+        '404': {$ref: '#/components/responses/Error'}
+        default: {$ref: '#/components/responses/Error'}
+  /api/v1/export:
+    get:
+      operationId: exportData
+      parameters:
+        - {$ref: '#/components/parameters/DocumentID'}
+      responses:
+        '200':
+          description: JSON export of documents in the same order as the document list, without pagination
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [schema_version, documents]
+                properties:
+                  schema_version: {const: '1.0'}
+                  documents: {type: array, items: {$ref: '#/components/schemas/DocumentDetail'}}
+        '404': {$ref: '#/components/responses/Error'}
+        default: {$ref: '#/components/responses/Error'}
+components:
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: {$ref: '#/components/schemas/ID'}
+    DocumentID:
+      name: document_id
+      in: query
+      schema: {$ref: '#/components/schemas/ID'}
+    Page:
+      name: page
+      in: query
+      schema: {type: integer, minimum: 1, default: 1}
+    PageSize:
+      name: page_size
+      in: query
+      schema: {type: integer, minimum: 1, maximum: 100, default: 25}
+  responses:
+    Error:
+      description: Request or server error
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [error]
+            properties:
+              error: {$ref: '#/components/schemas/Error'}
+    Pdf:
+      description: Original PDF bytes
+      content:
+        application/pdf:
+          schema: {type: string, format: binary}
+  schemas:
+    ID: {$ref: './extractor.schema.json#/$defs/ID'}
+    Mode:
+      enum: [mock, python]
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: {type: string, minLength: 1}
+        message: {type: string, minLength: 1}
+    Page:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items: {type: array}
+        page: {type: integer, minimum: 1}
+        page_size: {type: integer, minimum: 1, maximum: 100}
+        total: {type: integer, minimum: 0}
+    Document:
+      type: object
+      required: [document_id, original_filename, corpus_id, status, extraction_mode, failure, file_url, uploaded_at]
+      properties:
+        document_id: {$ref: '#/components/schemas/ID'}
+        original_filename: {type: string}
+        corpus_id: {type: [string, 'null']}
+        status: {enum: [queued, processing, completed, failed]}
+        extraction_mode: {$ref: '#/components/schemas/Mode'}
+        failure:
+          anyOf:
+            - {$ref: '#/components/schemas/Error'}
+            - {type: 'null'}
+        file_url: {type: string, format: uri-reference}
+        uploaded_at: {type: string, format: date-time}
+    DocumentDetail:
+      type: object
+      required: [document, data]
+      properties:
+        document: {$ref: '#/components/schemas/Document'}
+        data:
+          anyOf:
+            - {$ref: '#/components/schemas/DocumentData'}
+            - {type: 'null'}
+    DocumentData:
+      type: object
+      required: [source_document, publication, configurations, datasets, tasks, experiments, results, evidence, issues]
+      properties:
+        source_document: {$ref: './extractor.schema.json#/$defs/DocumentExtraction'}
+        publication: {$ref: './extractor.schema.json#/$defs/Publication'}
+        configurations: {type: array, items: {$ref: './extractor.schema.json#/$defs/Configuration'}}
+        datasets: {type: array, items: {$ref: './extractor.schema.json#/$defs/Dataset'}}
+        tasks: {type: array, items: {$ref: './extractor.schema.json#/$defs/Task'}}
+        experiments: {type: array, items: {$ref: './extractor.schema.json#/$defs/Experiment'}}
+        results: {type: array, items: {$ref: '#/components/schemas/ResultSummary'}}
+        evidence: {type: array, items: {$ref: './extractor.schema.json#/$defs/Evidence'}}
+        issues: {type: array, items: {$ref: '#/components/schemas/Issue'}}
+    Issue:
+      type: object
+      required: [issue_id, check_name, description, severity, result_ids, evidence_ids]
+      properties:
+        issue_id: {$ref: '#/components/schemas/ID'}
+        check_name: {type: string, minLength: 1}
+        description: {type: string, minLength: 1}
+        severity: {enum: [info, warning]}
+        result_ids: {type: array, items: {$ref: '#/components/schemas/ID'}}
+        evidence_ids: {type: array, items: {$ref: '#/components/schemas/ID'}}
+    MeasuredValue:
+      type: object
+      required: [value, unit]
+      properties:
+        value: {type: number}
+        unit: {type: string, minLength: 1}
+    ResultSummary:
+      type: object
+      required: [document_id, extraction_mode, result, normalized, baseline, dataset_name, task_type, configuration_name, issue_count]
+      properties:
+        document_id: {$ref: '#/components/schemas/ID'}
+        extraction_mode: {$ref: '#/components/schemas/Mode'}
+        result: {$ref: './extractor.schema.json#/$defs/Result'}
+        normalized:
+          anyOf:
+            - {$ref: '#/components/schemas/MeasuredValue'}
+            - {type: 'null'}
+        baseline:
+          anyOf:
+            - {$ref: '#/components/schemas/MeasuredValue'}
+            - {type: 'null'}
+        dataset_name: {type: [string, 'null']}
+        task_type: {type: [string, 'null']}
+        configuration_name: {type: [string, 'null']}
+        issue_count: {type: integer, minimum: 0}
+    ResultDetail:
+      allOf:
+        - {$ref: '#/components/schemas/ResultSummary'}
+        - type: object
+          required: [publication, configuration, dataset, task, experiment, evidence, issues]
+          properties:
+            publication: {$ref: './extractor.schema.json#/$defs/Publication'}
+            configuration:
+              anyOf:
+                - {$ref: './extractor.schema.json#/$defs/Configuration'}
+                - {type: 'null'}
+            dataset:
+              anyOf:
+                - {$ref: './extractor.schema.json#/$defs/Dataset'}
+                - {type: 'null'}
+            task:
+              anyOf:
+                - {$ref: './extractor.schema.json#/$defs/Task'}
+                - {type: 'null'}
+            experiment:
+              anyOf:
+                - {$ref: './extractor.schema.json#/$defs/Experiment'}
+                - {type: 'null'}
+            evidence: {type: array, items: {$ref: './extractor.schema.json#/$defs/Evidence'}}
+            issues: {type: array, items: {$ref: '#/components/schemas/Issue'}}
+    Criterion:
+      type: object
+      required: [criterion, status, message]
+      properties:
+        criterion:
+          enum: [task, dataset, dataset_version, data_split, metric_definition, metric_k, scale, aggregation, evaluation_protocol]
+        status: {enum: [match, mismatch, missing, not_applicable]}
+        message: {type: string, minLength: 1}
+    Comparison:
+      type: object
+      required: [left_result_id, right_result_id, left_extraction_mode, right_extraction_mode, status, criteria, numeric]
+      properties:
+        left_result_id: {$ref: '#/components/schemas/ID'}
+        right_result_id: {$ref: '#/components/schemas/ID'}
+        left_extraction_mode: {$ref: '#/components/schemas/Mode'}
+        right_extraction_mode: {$ref: '#/components/schemas/Mode'}
+        status: {enum: [comparable, not_comparable, insufficient_information]}
+        criteria: {type: array, items: {$ref: '#/components/schemas/Criterion'}}
+        numeric:
+          anyOf:
+            - type: object
+              required: [left_value, right_value, delta, unit, preferred]
+              properties:
+                left_value: {type: number}
+                right_value: {type: number}
+                delta: {type: number, description: Right value minus left value}
+                unit: {type: string, minLength: 1}
+                preferred: {enum: [left, right, tie, 'unknown']}
+            - {type: 'null'}

@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PaperTrace extractor response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "extraction_mode", "document", "publication", "configurations", "datasets", "tasks", "experiments", "results", "evidence"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "extraction_mode": { "enum": ["python", "mock"] },
+    "document": { "$ref": "#/$defs/DocumentExtraction" },
+    "publication": { "$ref": "#/$defs/Publication" },
+    "configurations": { "type": "array", "items": { "$ref": "#/$defs/Configuration" } },
+    "datasets": { "type": "array", "items": { "$ref": "#/$defs/Dataset" } },
+    "tasks": { "type": "array", "items": { "$ref": "#/$defs/Task" } },
+    "experiments": { "type": "array", "items": { "$ref": "#/$defs/Experiment" } },
+    "results": { "type": "array", "items": { "$ref": "#/$defs/Result" } },
+    "evidence": { "type": "array", "items": { "$ref": "#/$defs/Evidence" } }
+  },
+  "$defs": {
+    "ID": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]*$" },
+    "MaybeID": { "anyOf": [{ "$ref": "#/$defs/ID" }, { "type": "null" }] },
+    "Text": { "type": "string", "minLength": 1 },
+    "MaybeText": { "type": ["string", "null"], "minLength": 1 },
+    "Count": { "type": ["integer", "null"], "minimum": 0 },
+    "Page": { "type": "integer", "minimum": 1 },
+    "DocumentExtraction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["page_count", "unreadable_pages"],
+      "properties": {
+        "page_count": { "$ref": "#/$defs/Page" },
+        "unreadable_pages": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/Page" }
+        }
+      }
+    },
+    "Publication": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publication_id", "title", "year", "doi", "authors", "in_scope", "exclusion_reason"],
+      "properties": {
+        "publication_id": { "$ref": "#/$defs/ID" },
+        "title": { "$ref": "#/$defs/MaybeText" },
+        "year": { "type": ["integer", "null"], "minimum": 1 },
+        "doi": { "$ref": "#/$defs/MaybeText" },
+        "authors": { "type": ["array", "null"], "minItems": 1, "items": { "$ref": "#/$defs/Text" } },
+        "in_scope": { "type": "boolean" },
+        "exclusion_reason": { "$ref": "#/$defs/MaybeText" }
+      },
+      "if": { "properties": { "in_scope": { "const": false } } },
+      "then": { "properties": { "exclusion_reason": { "$ref": "#/$defs/Text" } } },
+      "else": { "properties": { "exclusion_reason": { "type": "null" } } }
+    },
+    "Configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["config_id"],
+      "properties": {
+        "config_id": { "$ref": "#/$defs/ID" },
+        "rag_variant": { "$ref": "#/$defs/MaybeText" },
+        "retrieval_method": { "$ref": "#/$defs/MaybeText" },
+        "retriever_model": { "$ref": "#/$defs/MaybeText" },
+        "embedding_model": { "$ref": "#/$defs/MaybeText" },
+        "embedding_version": { "$ref": "#/$defs/MaybeText" },
+        "chunking_method": { "$ref": "#/$defs/MaybeText" },
+        "chunk_size": { "$ref": "#/$defs/Count" },
+        "chunk_overlap": { "$ref": "#/$defs/Count" },
+        "chunk_unit": { "$ref": "#/$defs/MaybeText" },
+        "index_type": { "$ref": "#/$defs/MaybeText" },
+        "vector_store": { "$ref": "#/$defs/MaybeText" },
+        "top_k": { "$ref": "#/$defs/Count" },
+        "reranker_model": { "$ref": "#/$defs/MaybeText" },
+        "generator_model": { "$ref": "#/$defs/MaybeText" },
+        "generator_version": { "$ref": "#/$defs/MaybeText" },
+        "prompt_strategy": { "$ref": "#/$defs/MaybeText" },
+        "context_strategy": { "$ref": "#/$defs/MaybeText" },
+        "note": { "$ref": "#/$defs/MaybeText" }
+      }
+    },
+    "Dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dataset_id"],
+      "properties": {
+        "dataset_id": { "$ref": "#/$defs/ID" },
+        "dataset_name": { "$ref": "#/$defs/MaybeText" },
+        "dataset_version": { "$ref": "#/$defs/MaybeText" },
+        "language": { "$ref": "#/$defs/MaybeText" },
+        "data_split": { "$ref": "#/$defs/MaybeText" },
+        "scientific_domain": { "$ref": "#/$defs/MaybeText" },
+        "note": { "$ref": "#/$defs/MaybeText" }
+      }
+    },
+    "Task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id"],
+      "properties": {
+        "task_id": { "$ref": "#/$defs/ID" },
+        "task_type": { "$ref": "#/$defs/MaybeText" },
+        "note": { "$ref": "#/$defs/MaybeText" }
+      }
+    },
+    "Experiment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["experiment_id"],
+      "properties": {
+        "experiment_id": { "$ref": "#/$defs/ID" },
+        "evaluation_protocol": { "$ref": "#/$defs/MaybeText" },
+        "baseline_name": { "$ref": "#/$defs/MaybeText" },
+        "hardware": { "$ref": "#/$defs/MaybeText" },
+        "latency_ms": { "type": ["number", "null"], "minimum": 0 },
+        "tokens_per_query": { "type": ["number", "null"], "minimum": 0 },
+        "sample_size": { "$ref": "#/$defs/Count" },
+        "note": { "$ref": "#/$defs/MaybeText" }
+      }
+    },
+    "Result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["result_id", "experiment_id", "config_id", "dataset_id", "task_id", "metric_name", "metric_variant", "metric_direction", "metric_k", "metric_k_applicability", "reported_value", "reported_scale", "raw_value", "raw_unit", "aggregation", "result_origin", "cited_publication_id", "extraction_status"],
+      "properties": {
+        "result_id": { "$ref": "#/$defs/ID" },
+        "experiment_id": { "$ref": "#/$defs/MaybeID" },
+        "config_id": { "$ref": "#/$defs/MaybeID" },
+        "dataset_id": { "$ref": "#/$defs/MaybeID" },
+        "task_id": { "$ref": "#/$defs/MaybeID" },
+        "metric_group": { "$ref": "#/$defs/MaybeText" },
+        "metric_name": { "$ref": "#/$defs/Text" },
+        "metric_variant": { "$ref": "#/$defs/MaybeText" },
+        "metric_direction": { "enum": ["higher_is_better", "lower_is_better", "target", null] },
+        "metric_k": { "$ref": "#/$defs/Count" },
+        "metric_k_applicability": { "enum": ["applicable", "not_applicable", "unknown"] },
+        "reported_value": { "type": ["number", "null"] },
+        "reported_scale": { "enum": ["fraction", "percent", null] },
+        "raw_value": { "$ref": "#/$defs/MaybeText" },
+        "raw_unit": { "$ref": "#/$defs/MaybeText" },
+        "baseline_result_id": { "$ref": "#/$defs/MaybeID" },
+        "aggregation": { "$ref": "#/$defs/MaybeText" },
+        "sample_size": { "$ref": "#/$defs/Count" },
+        "result_origin": { "enum": ["primary", "cited"] },
+        "cited_publication_id": { "$ref": "#/$defs/MaybeText" },
+        "extraction_status": { "enum": ["extracted", "present_not_extractable", "absent"] },
+        "duplicate_of": { "$ref": "#/$defs/MaybeID" },
+        "note": { "$ref": "#/$defs/MaybeText" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "result_origin": { "const": "primary" } } },
+          "then": {
+            "properties": {
+              "experiment_id": { "$ref": "#/$defs/ID" },
+              "config_id": { "$ref": "#/$defs/ID" },
+              "dataset_id": { "$ref": "#/$defs/ID" },
+              "task_id": { "$ref": "#/$defs/ID" },
+              "cited_publication_id": { "type": "null" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "extraction_status": { "const": "extracted" } } },
+          "then": { "properties": { "raw_value": { "$ref": "#/$defs/Text" } } },
+          "else": { "properties": { "reported_value": { "type": "null" } } }
+        },
+        {
+          "if": { "properties": { "metric_k_applicability": { "enum": ["not_applicable", "unknown"] } } },
+          "then": { "properties": { "metric_k": { "type": "null" } } }
+        }
+      ]
+    },
+    "Evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_id", "entity_type", "entity_id", "field", "page", "fragment", "verification"],
+      "properties": {
+        "evidence_id": { "$ref": "#/$defs/ID" },
+        "entity_type": { "enum": ["publication", "configuration", "dataset", "task", "experiment", "result"] },
+        "entity_id": { "$ref": "#/$defs/ID" },
+        "field": { "$ref": "#/$defs/MaybeText" },
+        "page": { "$ref": "#/$defs/Page" },
+        "fragment": { "$ref": "#/$defs/MaybeText" },
+        "section": { "$ref": "#/$defs/MaybeText" },
+        "table": { "$ref": "#/$defs/MaybeText" },
+        "table_row": { "$ref": "#/$defs/MaybeText" },
+        "table_column": { "$ref": "#/$defs/MaybeText" },
+        "figure": { "$ref": "#/$defs/MaybeText" },
+        "block_id": { "$ref": "#/$defs/MaybeText" },
+        "bbox": {
+          "type": ["array", "null"],
+          "minItems": 4,
+          "maxItems": 4,
+          "items": { "type": "number", "minimum": 0, "maximum": 1 }
+        },
+        "verification": { "enum": ["text_match", "ocr_match", "locator_only", "unverified"] }
+      },
+      "if": { "properties": { "verification": { "enum": ["text_match", "ocr_match"] } } },
+      "then": { "properties": { "fragment": { "$ref": "#/$defs/Text" } } }
+    }
+  }
+}

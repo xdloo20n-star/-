@@ -5,9 +5,9 @@ import (
 	"math"
 	"testing"
 
-	"papertrace"
-	"papertrace/internal/extract"
-	"papertrace/internal/model"
+	"sverka"
+	"sverka/internal/extract"
+	"sverka/internal/model"
 )
 
 func TestNormalization(t *testing.T) {
@@ -38,11 +38,11 @@ func TestNormalization(t *testing.T) {
 }
 
 func TestComparison(t *testing.T) {
-	importer, err := extract.NewImporter(papertrace.ExtractorSchema)
+	importer, err := extract.NewImporter(sverka.ExtractorSchema)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := importer.Prepare(papertrace.MockExtraction, model.Document{ID: "demo", ExtractionMode: "mock"})
+	data, err := importer.Prepare(sverka.MockExtraction, model.Document{ID: "demo", ExtractionMode: "mock"})
 	if err != nil {
 		t.Fatal(err)
 	}

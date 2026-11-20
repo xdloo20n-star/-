@@ -12,7 +12,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	"papertrace/internal/model"
+	"sverka/internal/model"
 )
 
 type Importer struct {

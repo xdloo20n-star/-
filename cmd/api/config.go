@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -9,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	"papertrace/internal/api"
-	"papertrace/internal/extract"
+	"sverka/internal/api"
+	"sverka/internal/extract"
 )
 
 type settings struct {
@@ -67,4 +68,20 @@ func env(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func databasePath(dir string) (string, error) {
+	current := filepath.Join(dir, "sverka.sqlite")
+	// Use existing SQLite files in place, including their WAL sidecars.
+	legacy := filepath.Join(dir, "papertrace.sqlite")
+	for _, candidate := range []string{current, legacy} {
+		_, err := os.Stat(candidate)
+		if err == nil {
+			return candidate, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("check database %q: %w", candidate, err)
+		}
+	}
+	return current, nil
 }

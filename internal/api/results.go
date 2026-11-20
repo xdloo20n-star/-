@@ -10,8 +10,8 @@ import (
 	"regexp"
 	"strconv"
 
-	"papertrace/internal/model"
-	"papertrace/internal/store"
+	"sverka/internal/model"
+	"sverka/internal/store"
 )
 
 var idPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)

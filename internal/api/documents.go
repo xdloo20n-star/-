@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"papertrace/internal/model"
+	"sverka/internal/model"
 )
 
 const multipartOverhead = 64 << 10

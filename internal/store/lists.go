@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"strings"
 
-	"papertrace/internal/model"
+	"sverka/internal/model"
 )
 
 type Pagination struct {

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "PaperTrace extractor response v1",
+  "title": "Сверка — ответ извлекателя v1",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "extraction_mode", "document", "publication", "configurations", "datasets", "tasks", "experiments", "results", "evidence"],

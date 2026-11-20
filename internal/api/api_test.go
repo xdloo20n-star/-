@@ -19,10 +19,10 @@ import (
 	"testing"
 	"time"
 
-	"papertrace"
-	"papertrace/internal/extract"
-	"papertrace/internal/model"
-	"papertrace/internal/store"
+	"sverka"
+	"sverka/internal/extract"
+	"sverka/internal/model"
+	"sverka/internal/store"
 )
 
 type testExtractor func(context.Context, string) ([]byte, error)
@@ -46,7 +46,7 @@ func newHarness(t *testing.T, source extract.Extractor, timeout time.Duration) h
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	importer, err := extract.NewImporter(papertrace.ExtractorSchema)
+	importer, err := extract.NewImporter(sverka.ExtractorSchema)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestHTTPUploadWorkflow(t *testing.T) {
 	h := newHarness(t, testExtractor(func(ctx context.Context, _ string) ([]byte, error) {
 		select {
 		case <-release:
-			return papertrace.MockExtraction, nil
+			return sverka.MockExtraction, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -235,7 +235,7 @@ type errorResponse struct {
 }
 
 func TestInvalidUploads(t *testing.T) {
-	h := newHarness(t, extract.MockExtractor{Fixture: papertrace.MockExtraction}, time.Second)
+	h := newHarness(t, extract.MockExtractor{Fixture: sverka.MockExtraction}, time.Second)
 	data := upload(t, h, "not a PDF", http.StatusUnsupportedMediaType)
 	equal(t, "invalid PDF error", "invalid_pdf", decode[errorResponse](t, data).Error.Code)
 	data = upload(t, h, "%PDF-"+strings.Repeat("a", 508), http.StatusRequestEntityTooLarge)
@@ -260,7 +260,7 @@ func TestWorkerFailuresDoNotPublishPartialResults(t *testing.T) {
 			return []byte("{"), nil
 		}},
 		{"broken link after valid result", "invalid_extraction", func(context.Context, string) ([]byte, error) {
-			return bytes.Replace(papertrace.MockExtraction, []byte(`"baseline_result_id": "recall-dense"`), []byte(`"baseline_result_id": "missing"`), 1), nil
+			return bytes.Replace(sverka.MockExtraction, []byte(`"baseline_result_id": "recall-dense"`), []byte(`"baseline_result_id": "missing"`), 1), nil
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -280,7 +280,7 @@ func TestPythonExtractorJob(t *testing.T) {
 	if err != nil {
 		t.Skip("python3 unavailable")
 	}
-	fixture := bytes.Replace(papertrace.MockExtraction, []byte(`"extraction_mode": "mock"`), []byte(`"extraction_mode": "python"`), 1)
+	fixture := bytes.Replace(sverka.MockExtraction, []byte(`"extraction_mode": "mock"`), []byte(`"extraction_mode": "python"`), 1)
 	script := filepath.Join(t.TempDir(), "extractor with spaces.py")
 	body := fmt.Sprintf(`
 from pathlib import Path

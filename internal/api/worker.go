@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"papertrace/internal/model"
+	"sverka/internal/model"
 )
 
 // RunWorker claims jobs from SQLite. Call Recover before starting the worker.

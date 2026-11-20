@@ -14,7 +14,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"papertrace/internal/model"
+	"sverka/internal/model"
 )
 
 //go:embed 001_init.sql

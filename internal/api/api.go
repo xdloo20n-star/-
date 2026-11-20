@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"papertrace/internal/extract"
-	"papertrace/internal/model"
-	"papertrace/internal/store"
+	"sverka/internal/extract"
+	"sverka/internal/model"
+	"sverka/internal/store"
 )
 
 type Config struct {

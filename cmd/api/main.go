@@ -9,20 +9,19 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
-	"papertrace"
-	"papertrace/internal/api"
-	"papertrace/internal/extract"
-	"papertrace/internal/store"
+	"sverka"
+	"sverka/internal/api"
+	"sverka/internal/extract"
+	"sverka/internal/store"
 )
 
 func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := run(logger); err != nil {
-		logger.Error("PaperTrace stopped", "error", err)
+		logger.Error("Сверка остановлена", "error", err)
 		os.Exit(1)
 	}
 }
@@ -42,7 +41,11 @@ func run(logger *slog.Logger) error {
 		return fmt.Errorf("listen: %w", err)
 	}
 	defer listener.Close()
-	db, err := store.Open(ctx, filepath.Join(cfg.dataDir, "papertrace.sqlite"))
+	dbPath, err := databasePath(cfg.dataDir)
+	if err != nil {
+		return err
+	}
+	db, err := store.Open(ctx, dbPath)
 	if err != nil {
 		return err
 	}
@@ -50,11 +53,11 @@ func run(logger *slog.Logger) error {
 	if err := db.Recover(ctx); err != nil {
 		return fmt.Errorf("recover interrupted jobs: %w", err)
 	}
-	importer, err := extract.NewImporter(papertrace.ExtractorSchema)
+	importer, err := extract.NewImporter(sverka.ExtractorSchema)
 	if err != nil {
 		return fmt.Errorf("prepare extractor schema: %w", err)
 	}
-	extractors := []extract.Extractor{extract.MockExtractor{Fixture: papertrace.MockExtraction}}
+	extractors := []extract.Extractor{extract.MockExtractor{Fixture: sverka.MockExtraction}}
 	if cfg.python.Script != "" {
 		extractors = append(extractors, cfg.python)
 	}
@@ -75,7 +78,7 @@ func run(logger *slog.Logger) error {
 	}()
 	serveError := make(chan error, 1)
 	go func() { serveError <- server.Serve(listener) }()
-	logger.Info("PaperTrace listening", "address", listener.Addr(), "extraction_mode", cfg.api.ExtractionMode)
+	logger.Info("Сверка запущена", "address", listener.Addr(), "extraction_mode", cfg.api.ExtractionMode)
 
 	select {
 	case <-ctx.Done():

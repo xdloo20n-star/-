@@ -1,4 +1,4 @@
-module papertrace
+module sverka
 
 go 1.26.0
 

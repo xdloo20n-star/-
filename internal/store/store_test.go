@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"papertrace/internal/model"
+	"sverka/internal/model"
 )
 
 func TestAtomicImportAndRecovery(t *testing.T) {

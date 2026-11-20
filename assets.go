@@ -1,4 +1,4 @@
-package papertrace
+package sverka
 
 import _ "embed"
 

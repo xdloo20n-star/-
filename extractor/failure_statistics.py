@@ -37,6 +37,9 @@ class StatisticRow:
 
 
 def read_failure_statistics(page: Page, lines: list[str], occupied: set[str]) -> list[Table]:
+    from failure_ablations import read_failure_ablations
+    from failure_diagnostics import read_failure_diagnostics
+
     if page.verification != "text_match":
         return []
     tables = []
@@ -62,7 +65,8 @@ def read_failure_statistics(page: Page, lines: list[str], occupied: set[str]) ->
         rows = statistic_rows(lines[start:end], heads.start(1), heads.start(2))
         if rows:
             tables.extend(statistic_tables(page, label[1], index, caption, bootstrap, baseline, treatment, rows))
-    return tables
+    occupied.update(table.label.casefold() for table in tables)
+    return tables + read_failure_diagnostics(page, lines, occupied) + read_failure_ablations(page, lines, occupied)
 
 
 def paired_caption(caption: str, baseline: str, treatment: str) -> bool:

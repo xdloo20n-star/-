@@ -7,10 +7,18 @@ import re
 from typing import Any
 
 from failure_rates import failure_rate_definition
+from factuality_tables import read_factuality_tables
+from failure_diagnostics import order_audit_summaries
+from failure_ablations import link_ablation_averages
 from grouped_scores import enrich_grouped_scores
+from knowledge_benchmarks import read_knowledge_benchmarks
+from paired_scores import enrich_repeated_score_rows, read_additional_score_tables
 from pdf_pages import PDF, Page
 from qa_comparison import enrich_qa_comparisons
 from rag_tables import Column, MISSING, Table, read_tables
+from retrieval_tables import read_retrieval_tables
+from training_tables import read_training_tables
+from watermark_tables import read_watermark_tables
 
 RAG = re.compile(r"\bRAG(?:s)?\b|retrieval[\s-]+augmented\s+generation", re.I)
 DOI = re.compile(r"(?:\bdoi\s*:\s*|\bdoi\.org/)(10\.\d{4,9}/[-._;()/:A-Z0-9]+)", re.I)
@@ -262,21 +270,35 @@ def extract_publication(pdf: PDF) -> dict[str, Any]:
     question_answering = bool(TASK_TYPE.search(beginning) or TASK_TYPE.search(title or ""))
     failure_definition = failure_rate_definition(pdf.pages)
     extracted_tables = [table for page in pdf.pages for table in read_tables(page, failure_definition)]
+    extracted_tables += read_additional_score_tables(pdf.pages, extracted_tables)
+    extracted_tables += read_knowledge_benchmarks(pdf.pages, extracted_tables)
+    extracted_tables += read_watermark_tables(pdf.pages, extracted_tables)
+    extracted_tables += read_retrieval_tables(pdf.pages, extracted_tables)
+    extracted_tables += read_training_tables(pdf.pages, extracted_tables)
+    extracted_tables = read_factuality_tables(pdf.pages, extracted_tables)
     extracted_tables = enrich_grouped_scores(pdf.pages, extracted_tables)
+    extracted_tables = enrich_repeated_score_rows(pdf.pages, extracted_tables)
     extracted_tables = enrich_qa_comparisons(pdf.pages, extracted_tables)
+    extracted_tables = link_ablation_averages(pdf.pages, extracted_tables)
+    extracted_tables, audit_summaries = order_audit_summaries(pdf.pages, extracted_tables)
     by_page = defaultdict(list)
-    for table in extracted_tables:
+    for table in extracted_tables + audit_summaries:
         by_page[table.page.number].append(table)
+    duplicate_index = {}
     for tables in by_page.values():
         for table in tables:
-            add_table(payload, table, question_answering, tables)
+            if not (table.family == "judge_summary" and table.columns[0].duplicate_scope):
+                add_table(payload, table, question_answering, tables, duplicate_index)
+    for table in audit_summaries:
+        add_table(payload, table, question_answering, by_page[table.page.number], duplicate_index)
     return payload.as_dict()
 
 
-def scale_and_value(raw: str, header_unit: str | None) -> tuple[str | None, str | None, float | None, str]:
+def scale_and_value(raw: str, header_unit: str | None, *,
+                    grouped_digits: bool = False) -> tuple[str | None, str | None, float | None, str]:
     unit = "%" if raw.endswith("%") else header_unit
     scale = {"%": "percent", "percent": "percent", "fraction": "fraction"}.get((unit or "").lower())
-    number = raw.removesuffix("%").replace("−", "-").replace(",", ".")
+    number = raw.removesuffix("%").replace("−", "-").replace(",", "" if grouped_digits else ".")
     if raw in MISSING:
         return unit, scale, None, "absent"
     if re.match(r"^[+-]?0\d", number):
@@ -366,7 +388,8 @@ def metric_unit(column: Column, fragments: list[str]) -> tuple[str | None, str |
 
 
 def add_table(payload: Payload, table: Table, question_answering: bool,
-              page_tables: list[Table] | None = None) -> None:
+              page_tables: list[Table] | None = None,
+              duplicate_index: dict[tuple[object, ...], dict[str, Any]] | None = None) -> None:
     citation = ORIGIN_CITATION.search(table.caption)
     if not citation and UNSOURCED_QUOTATION.search(table.caption):
         return
@@ -405,18 +428,20 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
             continue
         dataset_id = payload.add(
             "datasets", "dataset_id", "dataset",
-            dataset_name=dataset, dataset_version=None, data_split=table.data_split or split,
+            dataset_name=dataset, dataset_version=None, data_split=column.data_split or table.data_split or split,
         )
         task_type = "question answering" if qa else None
         if qa and dataset and re.search(r"\bmulti[- ]hop\b", dataset, re.I):
             task_type = "multi-hop question answering"
+        if table.task_type:
+            task_type = table.task_type
         task_id = payload.add("tasks", "task_id", "task", task_type=task_type)
         experiment_id = payload.add(
             "experiments", "experiment_id", "experiment", evaluation_protocol="RAGAS" if protocol_fragment else None,
             note=table.caption,
         )
         if dataset:
-            if table.family in {"failure_rates", "failure_statistics"}:
+            if table.family in {"failure_rates", "failure_statistics", "watermark_metrics"}:
                 locator = {"table_row": column.original_row or table.row_section}
                 if column.original_row:
                     locator["table_column"] = "Dataset"
@@ -426,7 +451,9 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
             else:
                 payload.cite("dataset", dataset_id, "dataset_name", table.page,
                              dataset if dataset in table.page.text else table.label, table_column=dataset, **source)
-        if table.data_split:
+        if column.data_split_evidence:
+            payload.cite("dataset", dataset_id, "data_split", *column.data_split_evidence)
+        elif table.data_split:
             payload.cite("dataset", dataset_id, "data_split", table.page, table.data_split,
                          table_row=table.row_section, table_column="Slice", **source)
         elif split_fragment:
@@ -448,30 +475,47 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
         configurations = {}
         for column, raw in zip(table.columns, values, strict=True):
             generator = column.generator
-            if generator not in configurations:
-                configurations[generator] = add_configuration(
+            configuration_key = generator, column.generator_version
+            if configuration_key not in configurations:
+                configurations[configuration_key] = add_configuration(
                     payload, table, row, config_name, row_locator, column,
                 )
-            config_id = configurations[generator]
+            config_id = configurations[configuration_key]
             dataset_id, task_id, experiment_id = datasets[column.dataset, column.original_row]
             header = column.header
             (variant, variant_fragment), (context_unit, unit_fragment) = column_context[header.name.casefold()]
-            unit, scale, value, status = scale_and_value(raw, header.unit or context_unit)
+            unit, scale, value, status = scale_and_value(raw, header.unit or context_unit,
+                                                         grouped_digits=column.grouped_digits)
             direction = column.direction
             if direction is None and header.name.lower() in {"latency", "response time"}:
                 direction = "lower_is_better"
             if direction is None and header.name.lower() in {"em", "exact match", "f1", "accuracy", "precision", "recall"}:
                 direction = "higher_is_better"
+            name = column_names[header.name.casefold()][0] or header.name
+            metric_variant = column.metric_variant or variant
+            cutoff = header.cutoff if header.cutoff is not None else table_cutoff
+            result_scale = column.reported_scale or scale
             result_id = payload.add(
                 "results", "result_id", "result", experiment_id=experiment_id, config_id=config_id,
-                dataset_id=dataset_id, task_id=task_id, metric_name=column_names[header.name.casefold()][0] or header.name,
-                metric_variant=variant, metric_direction=direction,
-                metric_k=header.cutoff if header.cutoff is not None else table_cutoff,
-                metric_k_applicability="applicable" if header.cutoff is not None or table_cutoff is not None else "not_applicable",
-                reported_value=value, reported_scale=scale, raw_value=raw, raw_unit=unit,
+                dataset_id=dataset_id, task_id=task_id, metric_name=name,
+                metric_variant=metric_variant, metric_direction=direction, metric_k=cutoff,
+                metric_k_applicability="applicable" if cutoff is not None else "not_applicable",
+                reported_value=value, reported_scale=result_scale, raw_value=raw, raw_unit=unit,
                 aggregation=column.aggregation, result_origin=origin,
                 cited_publication_id=citation[1] if citation else None, extraction_status=status,
+                **({"sample_size": column.sample_size} if column.sample_size is not None else {}),
             )
+            if duplicate_index is not None and column.duplicate_scope and status == "extracted":
+                key = (column.duplicate_scope, config_name, *configuration_key, table.retriever_model, table.top_k, column.dataset,
+                       column.data_split or table.data_split or split, name, metric_variant, cutoff,
+                       column.aggregation, column.sample_size, unit, result_scale, raw, origin,
+                       citation[1] if citation else None)
+                current = payload.results[-1]
+                canonical = duplicate_index.setdefault(key, current)
+                if canonical is not current:
+                    current["duplicate_of"] = canonical["result_id"]
+                    for field in ("config_id", "dataset_id", "experiment_id", "task_id"):
+                        current[field] = canonical[field]
             column_generator = column.generator_locator or (generator if not table.row_section else None)
             column_title = " / ".join(item for item in
                                       [column_generator, column.dataset, header.label, column.aggregation] if item)
@@ -481,9 +525,19 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
                 column_title = column.source_label
             payload.cite("result", result_id, "raw_value", table.page, raw,
                          table_row=column.original_row or row_locator, table_column=column_title, **source)
-            if variant_fragment:
+            if column.metric_variant_evidence:
+                variant_page, variant_text = column.metric_variant_evidence
+                locator = ({**source, "table_row": column.original_row or row_locator, "table_column": column_title}
+                           if variant_page.number == table.page.number else {})
+                payload.cite("result", result_id, "metric_variant", variant_page, variant_text, **locator)
+            elif variant_fragment and column.metric_variant is None:
                 payload.cite("result", result_id, "metric_variant", table.page, variant_fragment,
                              table_column=column_title, **source)
+            if column.sample_size_evidence:
+                payload.cite("result", result_id, "sample_size", *column.sample_size_evidence)
+            elif column.sample_size is not None:
+                payload.cite("result", result_id, "sample_size", table.page, str(column.sample_size),
+                             table_row=column.original_row or row_locator, table_column=column.sample_size_label, **source)
             alias, alias_fragment = column_names[header.name.casefold()]
             if alias and alias_fragment:
                 payload.cite("result", result_id, "metric_name", table.page, alias_fragment,
@@ -501,15 +555,22 @@ def add_configuration(payload: Payload, table: Table, row: str, name: str,
                       row_locator: str, column: Column) -> str:
     cutoff = TOP_K.search(row)
     generator = column.generator
+    context = {"retriever_model": table.retriever_model} if table.retriever_model else {}
+    if column.generator_version:
+        context["generator_version"] = column.generator_version
     config_id = payload.add(
         "configurations", "config_id", "config", rag_variant=name,
-        generator_model=generator, top_k=int(cutoff[1]) if cutoff else None,
+        generator_model=generator, top_k=int(cutoff[1]) if cutoff else table.top_k, **context,
     )
     payload.cite("configuration", config_id, "rag_variant", table.page, row,
                  table_row=row_locator, table=table.label)
     if cutoff:
         payload.cite("configuration", config_id, "top_k", table.page, cutoff[0],
                      table_row=row_locator, table=table.label)
+    elif table.top_k_evidence:
+        payload.cite("configuration", config_id, "top_k", *table.top_k_evidence)
+    if table.retriever_model:
+        payload.cite("configuration", config_id, "retriever_model", table.page, table.retriever_model, table=table.label)
     if column.generator_evidence:
         payload.cite("configuration", config_id, "generator_model", *column.generator_evidence)
     elif generator:
@@ -521,4 +582,6 @@ def add_configuration(payload: Payload, table: Table, row: str, name: str,
             locator = {"table_column": column.generator_locator or generator}
         payload.cite("configuration", config_id, "generator_model", table.page, generator,
                      table=table.label, **locator)
+    if column.generator_version_evidence:
+        payload.cite("configuration", config_id, "generator_version", *column.generator_version_evidence)
     return config_id

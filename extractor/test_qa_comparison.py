@@ -39,6 +39,22 @@ SELF_RAG_NOTE = ("Self-RAG∗ is trained with a different base LLM, namely LLaMA
                  "and the results of others with the results from Self-RAG with LLaMA2 (13B).")
 SELF_RAG_DATASET_ROW = ("    Single-step   Adaptive   Self-RAG∗                 2.20   11.20     18.40    0.63   0.50"
                         "    31.40   39.00   33.60       0.63    0.17")
+ADAPTIVE_DATASET_ROW = ("                             Adaptive Retrieval       13.40   23.10     17.60    0.50   0.55"
+                        "    28.20   36.00   33.00       0.50    0.56")
+XXL_APPENDIX_PANEL = """Table 7: Results on each of a collection of datasets with FLAN-T5-XXL (11B) as the LLM.
+                                                                   SQuAD                            Natural Questions                             TriviaQA
+ Data          Types      Methods                  EM       F1       Acc     Step   Time   EM       F1     Acc     Step   Time   EM       F1        Acc     Step   Time
+                          No Retrieval             7.00    14.40     8.40    0.00   0.08   18.80   25.50   20.40    0.00   0.08   32.80   39.20     35.40    0.00   0.08
+                          Single-step Approach     28.80   40.80     35.00   1.00   1.00   41.40   51.20   47.60    1.00   1.00   56.00   64.70     61.80    1.00   1.00
+ Single-step   Adaptive   Self-RAG∗                 1.60   11.90     20.80   0.59   0.31   39.20   47.10   42.40    0.75   0.09   14.60   33.70     60.20    0.76   0.22
+"""
+GPT_APPENDIX_PANEL = """Table 8: Results on each of a collection of datasets with GPT-3.5 (Turbo) as the LLM.
+                                                                   SQuAD                            Natural Questions                             TriviaQA
+ Data          Types      Methods                  EM       F1       Acc     Step   Time   EM       F1     Acc     Step   Time   EM       F1        Acc     Step   Time
+                          No Retrieval             16.00   29.20     23.80   0.00   0.62   39.80   55.70   55.00    0.00   0.56   64.00   75.60     75.80    0.00   0.68
+                          Single-step Approach     18.00   33.80     29.20   1.00   1.00   32.40   46.80   54.80    1.00   1.00   55.20   66.50     65.80    1.00   1.00
+ Single-step   Adaptive   Self-RAG∗                 1.60   11.90     20.80   0.59   1.91   39.20   47.10   42.40    0.75   0.52   14.60   33.70     60.20    0.76   1.59
+"""
 BENCHMARK_LINK = ("Table 1 shows our main results averaged over all considered datasets. In addition, we report "
                   "the more granular results with FLAN-T5-XL on each of the single-hop and multihop datasets in "
                   "Table 2 (and more with different LLMs in Table 7 and Table 8 of Appendix).")
@@ -157,6 +173,74 @@ class QAComparisonTest(unittest.TestCase):
                          (6, "text_match", "average time for answering each query relative to the one-step approach"))
         self.assertNotIn("table", evidence)
         self.assertTrue(any(r["metric_name"] == "Retrieval-and-generation steps per query" for r in payload["results"]))
+
+    def test_fractional_step_counts_establish_a_query_mean(self):
+        grid = DATASET_PANELS.replace("\n\n", f"\n{ADAPTIVE_DATASET_ROW}\n\n", 1)
+        methodology = Page(6, EFFICIENCY, "text_match")
+        for source, value, expected in ((methodology, "0.50", "mean across queries"),
+                                        (None, "0.50", None), (methodology, "2.00", None)):
+            with self.subTest(source=source, value=value):
+                payload = extract(grid.replace("0.50", value), context=(source,) if source else ())
+                evidence = next(e for e in payload["evidence"] if e["field"] == "raw_value"
+                                and e.get("table_row") == "Adaptive Retrieval" and e["fragment"] == value)
+                result = next(r for r in payload["results"] if r["result_id"] == evidence["entity_id"])
+                config = next(c for c in payload["configurations"] if c["config_id"] == result["config_id"])
+                dataset = next(d for d in payload["datasets"] if d["dataset_id"] == result["dataset_id"])
+                self.assertEqual((evidence["page"], evidence["table"], evidence["table_column"]),
+                                 (7, "Table 2", "FLAN-T5-XL (3B) / SQuAD / Step" + (f" / {expected}" if expected else "")))
+                self.assertEqual((config["generator_model"], dataset["dataset_name"], result["aggregation"]),
+                                 ("FLAN-T5-XL (3B)", "SQuAD", expected))
+                self.assertEqual(result["metric_name"], "Retrieval-and-generation steps per query" if source else "Step")
+                self.assertIsNone(result["raw_unit"])
+
+    def test_relative_time_uses_the_colocated_one_step_reference(self):
+        methodology = Page(6, EFFICIENCY, "text_match")
+        for text, expected in (
+                (DATASET_PANELS, "denominator FLAN-T5-XL (3B) / Natural Questions / Single-step Approach"),
+                (DATASET_PANELS.replace("44.60       1.00    1.00", "44.60       1.00    1.02"), None)):
+            with self.subTest(expected=expected):
+                payload = extract(text, context=(methodology,))
+                evidence = next(e for e in payload["evidence"] if e["field"] == "raw_value"
+                                and e.get("table_row") == "No Retrieval" and e["fragment"] == "0.13")
+                result = next(r for r in payload["results"] if r["result_id"] == evidence["entity_id"])
+                self.assertEqual((result["metric_name"], result["metric_variant"], result["raw_unit"]),
+                                 ("Relative time per query", expected, None))
+                self.assertEqual((evidence["page"], evidence["table"], evidence["table_column"]),
+                                 (7, "Table 2", "FLAN-T5-XL (3B) / Natural Questions / Time / mean across queries"))
+                proof = [e for e in payload["evidence"] if e["entity_id"] == result["result_id"]
+                         and e["field"] == "metric_variant"]
+                self.assertEqual([e["page"] for e in proof], [6] if expected else [])
+
+    def test_self_rag_duplicate_requires_the_same_model_dataset_and_measurement(self):
+        aggregate = (MODEL_PANEL.replace("Self-RAG∗ is trained with a different base LLM, namely LLaMA2.", SELF_RAG_NOTE)
+                     .replace("FLAN-T5-XXL (11B)\n", "FLAN-T5-XXL (11B)                      GPT-3.5 (Turbo)\n")
+                     .replace("Acc     Step   Time\n", "Acc     Step   Time   EM       F1     Acc     Step   Time\n")
+                     .replace("19.33   0.00   0.08\n", "19.33   0.00   0.08   35.77   48.56   44.27   0.00   0.71\n")
+                     .replace("34.13   0.74   0.23\n", "34.13   0.74   0.23   10.87   22.98   34.13   0.74   1.50\n")
+                     .replace("43.77   1.35   2.00\n", "43.77   1.35   2.00   37.97   50.91   48.97   1.03   1.46\n"))
+        source = Page(6, aggregate + EFFICIENCY, "text_match")
+        link = Page(7, BENCHMARK_LINK, "text_match")
+        for gpt, matching_f1 in ((GPT_APPENDIX_PANEL, True), (GPT_APPENDIX_PANEL.replace("1.60   11.90", "1.60   11.91"), False)):
+            with self.subTest(matching_f1=matching_f1):
+                payload = extract(XXL_APPENDIX_PANEL + "\n" + gpt, page=15, context=(source, link))
+                results = {r["result_id"]: r for r in payload["results"]}
+                locators = [e for e in payload["evidence"] if e["field"] == "raw_value"
+                            and e["page"] == 15 and e.get("table_row") == "Self-RAG∗"]
+                f1 = next(e for e in locators if e["table"] == "Table 8" and " / SQuAD / F1" in e["table_column"])
+                prior = next(e for e in locators if e["table"] == "Table 7" and " / SQuAD / F1" in e["table_column"])
+                result = results[f1["entity_id"]]
+                config = next(c for c in payload["configurations"] if c["config_id"] == result["config_id"])
+                dataset = next(d for d in payload["datasets"] if d["dataset_id"] == result["dataset_id"])
+                self.assertEqual((result["metric_name"], result["raw_value"], config["generator_model"],
+                                  dataset["dataset_name"], f1["table_column"]),
+                                 ("F1", "11.90" if matching_f1 else "11.91", "LLaMA2 (13B)", "SQuAD",
+                                  "GPT-3.5 (Turbo) / SQuAD / F1"))
+                self.assertEqual(result.get("duplicate_of"), prior["entity_id"] if matching_f1 else None)
+                if matching_f1:
+                    for field in ("config_id", "dataset_id", "experiment_id", "task_id"):
+                        self.assertEqual(result[field], results[prior["entity_id"]][field])
+                time = next(e for e in locators if e["table"] == "Table 8" and " / SQuAD / Time" in e["table_column"])
+                self.assertIsNone(results[time["entity_id"]].get("duplicate_of"))
 
     def test_published_generator_identifiers_keep_literal_table_locators(self):
         source = Page(6, GENERATOR_METHOD, "text_match")

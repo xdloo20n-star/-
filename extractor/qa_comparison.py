@@ -69,6 +69,9 @@ DATASET_METHOD = re.compile(
 DATASET_ITEMS = re.compile(rf"\d+\)\s+({DATASET_NAME})\s+\(")
 COUNT_WORDS = ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve")
 EFFICIENCY_NAMES = {"Step": "Retrieval-and-generation steps per query", "Time": "Relative time per query"}
+SINGLE_STEP = "Single-step Approach"
+ONE = re.compile(r"1(?:[.,]0+)?")
+FRACTIONAL_COUNT = re.compile(r"\d+[.,]\d*[1-9]\d*")
 
 
 def read_qa_comparisons(page: Page, lines: list[str], occupied: set[str]) -> list[Table]:
@@ -159,7 +162,16 @@ def enrich_qa_comparisons(pages: list[Page], tables: list[Table]) -> list[Table]
             enriched.append(table)
             continue
         average = averages.get(" ".join(table.label.casefold().split()))
-        columns = [enrich_qa_column(column, efficiency, linked_scores, average) for column in table.columns]
+        baselines = [values for row, values in table.rows if row.casefold() == SINGLE_STEP.casefold()]
+        baseline = baselines[0] if len(baselines) == 1 else None
+        columns = []
+        for i, column in enumerate(table.columns):
+            observed_steps = column.header.label == "Step" and any(
+                FRACTIONAL_COUNT.fullmatch(values[i]) for _, values in table.rows
+            )
+            reference_time = baseline is not None and ONE.fullmatch(baseline[i]) is not None
+            columns.append(enrich_qa_column(column, efficiency, linked_scores, average,
+                                            observed_steps, reference_time))
         rows = [(row, values) for row, values in table.rows if not MARKED_METHOD.search(row)]
         enriched.append(replace(table, columns=[canonical_generator(column, documented_models) for column in columns],
                                 rows=rows))
@@ -167,8 +179,13 @@ def enrich_qa_comparisons(pages: list[Page], tables: list[Table]) -> list[Table]
             models = exceptions.get((" ".join(table.label.casefold().split()), row.casefold()))
             if not models or any(column.generator not in models for column in columns):
                 continue
+            reference_page, reference = models[columns[0].generator][1]
+            # The caption identifies which comparison columns reuse the same named model.
+            scope = (reference_page.number, reference) if average or all(c.dataset for c in columns) else None
             marked_columns = [replace(column, generator=models[column.generator][0], generator_locator=column.generator,
-                                      generator_evidence=models[column.generator][1]) for column in columns]
+                                      generator_evidence=models[column.generator][1],
+                                      duplicate_scope=scope if column.header.label != "Time" else None)
+                              for column in columns]
             enriched.append(replace(table, columns=marked_columns, rows=[(row, values)], config_name=row[:-1]))
     return enriched
 
@@ -274,21 +291,29 @@ def benchmark_averages(tables: list[Table], pages: list[Page]) -> dict[str, tupl
 
 def enrich_qa_column(column: Column, efficiency: tuple[Page, re.Match[str]] | None,
                      linked_scores: tuple[Page, re.Match[str]] | None,
-                     average: tuple[str, tuple[Page, str]] | None) -> Column:
+                     average: tuple[str, tuple[Page, str]] | None,
+                     fractional_steps: bool, relative_reference: bool) -> Column:
     label = column.header.label
     if efficiency and label in EFFICIENCY_NAMES:
         page, match = efficiency
         column = replace(column, header=replace(column.header, name=EFFICIENCY_NAMES[label]),
-                         name_evidence=(page, match[label]))
+                         direction="lower_is_better", name_evidence=(page, match[label]))
     if column.dataset is None and column.aggregation and average:
         aggregation, evidence = average
-        return replace(column, aggregation=aggregation, aggregation_evidence=evidence)
+        column = replace(column, aggregation=aggregation, aggregation_evidence=evidence)
     if column.dataset and not column.aggregation:
         if label in {"EM", "F1", "Acc"} and linked_scores:
             page, match = linked_scores
             return replace(column, aggregation="mean across queries", aggregation_evidence=(page, match[0]))
-        if label == "Time" and column.name_evidence:
+        # Fractional entries under a per-query integer count require averaging.
+        if label == "Step" and column.name_evidence and fractional_steps:
             return replace(column, aggregation="mean across queries", aggregation_evidence=column.name_evidence)
+        if label == "Time" and column.name_evidence:
+            column = replace(column, aggregation="mean across queries", aggregation_evidence=column.name_evidence)
+    scope = column.dataset or (column.aggregation if average else None)
+    if label == "Time" and column.name_evidence and relative_reference and column.generator and scope:
+        variant = f"denominator {column.generator} / {scope} / {SINGLE_STEP}"
+        column = replace(column, metric_variant=variant, metric_variant_evidence=column.name_evidence)
     return column
 
 

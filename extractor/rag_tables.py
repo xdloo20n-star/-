@@ -66,6 +66,18 @@ class Column:
     generator_evidence: tuple[Page, str] | None = None
     direction: str | None = None
     source_label: str | None = None
+    data_split: str | None = None
+    data_split_evidence: tuple[Page, str] | None = None
+    grouped_digits: bool = False
+    metric_variant: str | None = None
+    metric_variant_evidence: tuple[Page, str] | None = None
+    reported_scale: str | None = None
+    sample_size: int | None = None
+    sample_size_label: str = "N"
+    sample_size_evidence: tuple[Page, str] | None = None
+    duplicate_scope: tuple[int, str] | None = None
+    generator_version: str | None = None
+    generator_version_evidence: tuple[Page, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -80,6 +92,10 @@ class Table:
     family: str | None = None
     config_name: str | None = None
     data_split: str | None = None
+    retriever_model: str | None = None
+    top_k: int | None = None
+    top_k_evidence: tuple[Page, str] | None = None
+    task_type: str | None = None
 
 
 def headers(line: str) -> list[Header]:

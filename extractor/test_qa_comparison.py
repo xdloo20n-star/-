@@ -34,11 +34,23 @@ Self-RAG∗ is trained with a different base LLM, namely LLaMA2.
              Adaptive-RAG (Ours)      37.17   46.94   42.10   2.17   3.60   38.90   48.62   43.77   1.35   2.00
 """
 
+SELF_RAG_NOTE = ("Self-RAG∗ is trained with a different base LLM, namely LLaMA2 (Touvron et al., 2023); therefore, "
+                 "we compare the results of FLAN-T5-XL (3B) with the results from Self-RAG with LLaMA2 (7B) "
+                 "and the results of others with the results from Self-RAG with LLaMA2 (13B).")
+SELF_RAG_DATASET_ROW = ("    Single-step   Adaptive   Self-RAG∗                 2.20   11.20     18.40    0.63   0.50"
+                        "    31.40   39.00   33.60       0.63    0.17")
+BENCHMARK_LINK = ("Table 1 shows our main results averaged over all considered datasets. In addition, we report "
+                  "the more granular results with FLAN-T5-XL on each of the single-hop and multihop datasets in "
+                  "Table 2 (and more with different LLMs in Table 7 and Table 8 of Appendix).")
+
 
 EFFECTIVENESS = "For effectiveness, we use F1, EM, and Accuracy (Acc), following the standard evaluation protocol."
 EFFICIENCY = ("For efficiency, we measure the number of retrievaland-generate steps and the average time "
               "for answering each query relative to the one-step approach.")
 CODE_LINK = "Code is available at: https://\ngithub.com/starsuzi/Adaptive-RAG."
+GENERATOR_METHOD = ("Regarding the LLMs that are used to generate answers, we use the FLAN-T5 series models "
+                    "(Chung et al., 2022) of XL with 3B parameters and XXL with 11B parameters, and the GPT-3.5 "
+                    "model (gpt-3.5-turbo-instruct).")
 DATASET_METHOD = ("The single-hop QA datasets are namely 1) SQuAD v1.1 (Rajpurkar et al., 2016), "
                   "and 2) Natural Questions (Kwiatkowski et al., 2019).\n"
                   "Multi-hop QA We use two benchmark multi-hop QA datasets, which require sequential reasoning "
@@ -89,6 +101,49 @@ class QAComparisonTest(unittest.TestCase):
         first_panel = DATASET_PANELS.split("\n\n", 1)[0]
         self.assertEqual(extract(first_panel.replace("10.50", "10.5O"))["results"], [])
 
+    def test_marked_method_uses_caption_baseline_without_replacing_column_locator(self):
+        layout = MODEL_PANEL.replace("Self-RAG∗ is trained with a different base LLM, namely LLaMA2.", SELF_RAG_NOTE)
+        payload = extract(layout, page=6)
+        self.assertEqual(len(payload["results"]), 30)
+        for raw, model, printed in (("20.79", "LLaMA2 (7B)", "FLAN-T5-XL (3B)"),
+                                    ("22.98", "LLaMA2 (13B)", "FLAN-T5-XXL (11B)")):
+            with self.subTest(model=model):
+                evidence = next(e for e in payload["evidence"] if e["field"] == "raw_value" and e["fragment"] == raw)
+                self.assertEqual((evidence["page"], evidence["table"], evidence["table_row"], evidence["table_column"]),
+                                 (6, "Table 1", "Self-RAG∗", f"{printed} / F1 / reported average"))
+                result = next(r for r in payload["results"] if r["result_id"] == evidence["entity_id"])
+                config = next(c for c in payload["configurations"] if c["config_id"] == result["config_id"])
+                self.assertEqual((config["rag_variant"], config["generator_model"]), ("Self-RAG", model))
+                self.assertTrue(any(e["entity_type"] == "configuration" and e["entity_id"] == config["config_id"]
+                                    and e["field"] == "generator_model" and e["page"] == 6
+                                    and e["verification"] == "text_match" and e["fragment"] == SELF_RAG_NOTE
+                                    for e in payload["evidence"]))
+
+    def test_marked_model_transfers_only_to_paper_linked_tables_with_same_marker(self):
+        model_page = Page(6, MODEL_PANEL.replace("Self-RAG∗ is trained with a different base LLM, namely LLaMA2.",
+                                                SELF_RAG_NOTE), "text_match")
+        grid = DATASET_PANELS.replace("\n\n", f"\n{SELF_RAG_DATASET_ROW}\n\n", 1)
+        for table, printed, marker, expected in (("Table 2", "FLAN-T5-XL (3B)", "∗", "LLaMA2 (7B)"),
+                                                 ("Table 7", "FLAN-T5-XXL (11B)", "∗", "LLaMA2 (13B)"),
+                                                 ("Table 7", "FLAN-T5-XL (3B)", "∗", None),
+                                                 ("Table 9", "FLAN-T5-XL (3B)", "∗", None),
+                                                 ("Table 2", "FLAN-T5-XL (3B)", "†", None)):
+            with self.subTest(table=table, marker=marker):
+                layout = (grid.replace("Table 2", table).replace("FLAN-T5-XL (3B)", printed)
+                          .replace("Self-RAG∗", f"Self-RAG{marker}"))
+                context = Page(7, layout, "text_match", BENCHMARK_LINK)
+                payload = extract(layout, context=(model_page, context))
+                config_by_id = {c["config_id"]: c for c in payload["configurations"]}
+                marked_evidence = [e for e in payload["evidence"] if e["field"] == "raw_value" and e["page"] == 7
+                                   and e.get("table_row", "").startswith("Self-RAG")]
+                if expected is None:
+                    self.assertEqual(marked_evidence, [])
+                    continue
+                evidence = next(e for e in marked_evidence if e["fragment"] == "11.20")
+                self.assertEqual(evidence["table_column"], f"{printed} / SQuAD / F1")
+                result = next(r for r in payload["results"] if r["result_id"] == evidence["entity_id"])
+                self.assertEqual(config_by_id[result["config_id"]]["generator_model"], expected)
+
     def test_uses_documented_names_from_native_methodology(self):
         methodology = Page(6, EFFICIENCY, "text_match")
         payload = extract(DATASET_PANELS, context=(methodology,))
@@ -102,6 +157,24 @@ class QAComparisonTest(unittest.TestCase):
                          (6, "text_match", "average time for answering each query relative to the one-step approach"))
         self.assertNotIn("table", evidence)
         self.assertTrue(any(r["metric_name"] == "Retrieval-and-generation steps per query" for r in payload["results"]))
+
+    def test_published_generator_identifiers_keep_literal_table_locators(self):
+        source = Page(6, GENERATOR_METHOD, "text_match")
+        for printed, canonical in (("FLAN-T5-XL (3B)", "FLAN-T5-XL 3B"), ("FLAN-T5-XXL (11B)", "FLAN-T5-XXL 11B"),
+                                   ("GPT-3.5 (Turbo)", "gpt-3.5-turbo-instruct"),
+                                   ("FLAN-T5-XL (4B)", "FLAN-T5-XL (4B)"), ("GPT-3.5 (Beta)", "GPT-3.5 (Beta)")):
+            with self.subTest(printed=printed):
+                layout = DATASET_PANELS.replace("FLAN-T5-XL (3B)", printed)
+                payload = extract(layout, context=(source,))
+                evidence = next(e for e in payload["evidence"] if e["field"] == "raw_value" and e["fragment"] == "46.15")
+                self.assertEqual(evidence["table_column"], f"{printed} / HotpotQA / F1")
+                result = next(r for r in payload["results"] if r["result_id"] == evidence["entity_id"])
+                config = next(c for c in payload["configurations"] if c["config_id"] == result["config_id"])
+                self.assertEqual(config["generator_model"], canonical)
+                model_source = next(e for e in payload["evidence"] if e["field"] == "generator_model"
+                                    and e["entity_id"] == config["config_id"])
+                self.assertEqual(model_source["page"], 6 if canonical != printed else 7)
+                self.assertEqual(model_source["verification"], "text_match")
 
     def test_query_mean_requires_linked_evaluator_and_metric_description(self):
         link_page = Page(1, CODE_LINK, "text_match")

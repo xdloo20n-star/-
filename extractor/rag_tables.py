@@ -62,6 +62,10 @@ class Column:
     original_row: str | None = None
     name_evidence: tuple[Page, str] | None = None
     aggregation_evidence: tuple[Page, str] | None = None
+    generator_locator: str | None = None
+    generator_evidence: tuple[Page, str] | None = None
+    direction: str | None = None
+    source_label: str | None = None
 
 
 @dataclass(frozen=True)
@@ -74,6 +78,8 @@ class Table:
     rows: list[tuple[str, list[str]]]
     row_section: str | None = None
     family: str | None = None
+    config_name: str | None = None
+    data_split: str | None = None
 
 
 def headers(line: str) -> list[Header]:
@@ -170,8 +176,11 @@ def assign_groups(columns: list[Header], groups: list[tuple[str, float]]) -> lis
     return options[len(columns)][1]
 
 
-def read_tables(page: Page) -> list[Table]:
+def read_tables(page: Page, failure_definition: tuple[Page, str] | None = None) -> list[Table]:
+    from failure_rates import read_failure_rates
+    from failure_statistics import read_failure_statistics
     from grouped_scores import read_grouped_scores
+    from paired_scores import read_paired_scores
     from qa_comparison import read_qa_comparisons
 
     lines = page.text.splitlines()
@@ -234,6 +243,9 @@ def read_tables(page: Page) -> list[Table]:
     if page.verification == "text_match":
         tables.extend(read_native_comparisons(page, lines, occupied))
         tables.extend(read_qa_comparisons(page, lines, occupied))
+        tables.extend(read_paired_scores(page, lines, occupied))
+        tables.extend(read_failure_rates(page, occupied, failure_definition))
+        tables.extend(read_failure_statistics(page, lines, occupied))
     return sorted(tables, key=lambda table: table.index)
 
 

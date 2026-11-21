@@ -6,6 +6,7 @@ import math
 import re
 from typing import Any
 
+from failure_rates import failure_rate_definition
 from grouped_scores import enrich_grouped_scores
 from pdf_pages import PDF, Page
 from qa_comparison import enrich_qa_comparisons
@@ -259,7 +260,8 @@ def extract_publication(pdf: PDF) -> dict[str, Any]:
         return payload.as_dict()
 
     question_answering = bool(TASK_TYPE.search(beginning) or TASK_TYPE.search(title or ""))
-    extracted_tables = [table for page in pdf.pages for table in read_tables(page)]
+    failure_definition = failure_rate_definition(pdf.pages)
+    extracted_tables = [table for page in pdf.pages for table in read_tables(page, failure_definition)]
     extracted_tables = enrich_grouped_scores(pdf.pages, extracted_tables)
     extracted_tables = enrich_qa_comparisons(pdf.pages, extracted_tables)
     by_page = defaultdict(list)
@@ -403,7 +405,7 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
             continue
         dataset_id = payload.add(
             "datasets", "dataset_id", "dataset",
-            dataset_name=dataset, dataset_version=None, data_split=split,
+            dataset_name=dataset, dataset_version=None, data_split=table.data_split or split,
         )
         task_type = "question answering" if qa else None
         if qa and dataset and re.search(r"\bmulti[- ]hop\b", dataset, re.I):
@@ -414,9 +416,20 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
             note=table.caption,
         )
         if dataset:
-            payload.cite("dataset", dataset_id, "dataset_name", table.page,
-                         dataset if dataset in table.page.text else table.label, table_column=dataset, **source)
-        if split_fragment:
+            if table.family in {"failure_rates", "failure_statistics"}:
+                locator = {"table_row": column.original_row or table.row_section}
+                if column.original_row:
+                    locator["table_column"] = "Dataset"
+                elif table.row_section == dataset:
+                    locator["table_column"] = "Setting"
+                payload.cite("dataset", dataset_id, "dataset_name", table.page, dataset, **locator, **source)
+            else:
+                payload.cite("dataset", dataset_id, "dataset_name", table.page,
+                             dataset if dataset in table.page.text else table.label, table_column=dataset, **source)
+        if table.data_split:
+            payload.cite("dataset", dataset_id, "data_split", table.page, table.data_split,
+                         table_row=table.row_section, table_column="Slice", **source)
+        elif split_fragment:
             payload.cite("dataset", dataset_id, "data_split", table.page, split_fragment, **source)
         if protocol_fragment:
             payload.cite("experiment", experiment_id, "evaluation_protocol", table.page, protocol_fragment, **source)
@@ -430,17 +443,23 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
         else:
             parent_name = row
             config_name = row
+        if table.config_name:
+            config_name = table.config_name
         configurations = {}
         for column, raw in zip(table.columns, values, strict=True):
             generator = column.generator
             if generator not in configurations:
-                configurations[generator] = add_configuration(payload, table, row, config_name, generator, row_locator)
+                configurations[generator] = add_configuration(
+                    payload, table, row, config_name, row_locator, column,
+                )
             config_id = configurations[generator]
             dataset_id, task_id, experiment_id = datasets[column.dataset, column.original_row]
             header = column.header
             (variant, variant_fragment), (context_unit, unit_fragment) = column_context[header.name.casefold()]
             unit, scale, value, status = scale_and_value(raw, header.unit or context_unit)
-            direction = "lower_is_better" if header.name.lower() in {"latency", "response time"} else None
+            direction = column.direction
+            if direction is None and header.name.lower() in {"latency", "response time"}:
+                direction = "lower_is_better"
             if direction is None and header.name.lower() in {"em", "exact match", "f1", "accuracy", "precision", "recall"}:
                 direction = "higher_is_better"
             result_id = payload.add(
@@ -453,11 +472,13 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
                 aggregation=column.aggregation, result_origin=origin,
                 cited_publication_id=citation[1] if citation else None, extraction_status=status,
             )
-            column_generator = generator if not table.row_section else None
+            column_generator = column.generator_locator or (generator if not table.row_section else None)
             column_title = " / ".join(item for item in
                                       [column_generator, column.dataset, header.label, column.aggregation] if item)
             if column.original_row:
                 column_title = f"{row} / {header.label}"
+            if column.source_label:
+                column_title = column.source_label
             payload.cite("result", result_id, "raw_value", table.page, raw,
                          table_row=column.original_row or row_locator, table_column=column_title, **source)
             if variant_fragment:
@@ -476,9 +497,10 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
                              table_column=column_title, **source)
 
 
-def add_configuration(payload: Payload, table: Table, row: str, name: str, generator: str | None,
-                      row_locator: str) -> str:
+def add_configuration(payload: Payload, table: Table, row: str, name: str,
+                      row_locator: str, column: Column) -> str:
     cutoff = TOP_K.search(row)
+    generator = column.generator
     config_id = payload.add(
         "configurations", "config_id", "config", rag_variant=name,
         generator_model=generator, top_k=int(cutoff[1]) if cutoff else None,
@@ -488,8 +510,15 @@ def add_configuration(payload: Payload, table: Table, row: str, name: str, gener
     if cutoff:
         payload.cite("configuration", config_id, "top_k", table.page, cutoff[0],
                      table_row=row_locator, table=table.label)
-    if generator:
-        locator = {"table_row": table.row_section} if table.row_section else {"table_column": generator}
+    if column.generator_evidence:
+        payload.cite("configuration", config_id, "generator_model", *column.generator_evidence)
+    elif generator:
+        if table.family == "failure_statistics" and column.original_row:
+            locator = {"table_row": column.original_row, "table_column": "Model"}
+        elif table.row_section and not column.generator_locator:
+            locator = {"table_row": table.row_section}
+        else:
+            locator = {"table_column": column.generator_locator or generator}
         payload.cite("configuration", config_id, "generator_model", table.page, generator,
                      table=table.label, **locator)
     return config_id

@@ -16,6 +16,14 @@ CAPTION_MODEL = re.compile(r"\b([\w.-]+(?: \([^()]+\))?) as (?:the )?(?:LLM|mode
 MODELS_CAPTION = re.compile(r"\b(?:different|multiple) (?:LLMs?|models?)\b", re.I)
 AVERAGED_CAPTION = re.compile(r"\baverage[ds]?\b", re.I)
 MARKED_METHOD = re.compile(r"[*∗†‡]$")
+COMPARISON_TITLE = r"[\w.-]+(?:\s+\([^()]+\))?"
+CAPTION_COMPARATORS = re.compile(
+    rf"\b(?P<marked>(?P<method>[\w.-]+)[*∗†‡])\s+is\s+trained\s+with\s+a\s+different\s+base\s+LLM,\s+"
+    rf"namely\s+(?P<family>[\w.-]+)\s+\([^()]{{1,120}}\);\s+therefore,\s+we\s+compare\s+"
+    rf"the\s+results\s+of\s+(?P<reference>{COMPARISON_TITLE})\s+with\s+the\s+results\s+from\s+"
+    rf"(?P=method)\s+with\s+(?P<first>(?P=family)\s+\([^()]+\))\s+and\s+the\s+results\s+of\s+others\s+"
+    rf"with\s+the\s+results\s+from\s+(?P=method)\s+with\s+(?P<others>(?P=family)\s+\([^()]+\))\.", re.I,
+)
 EFFICIENCY = re.compile(
     r"\bfor\s+efficiency,\s+we\s+measure\s+the\s+"
     r"(?P<Step>number\s+of\s+retrieval\s*-?\s*and\s*-\s*generate\s+steps)\s+and\s+the\s+"
@@ -26,6 +34,13 @@ EFFECTIVENESS = re.compile(
     r"\bfor\s+effectiveness,\s+we\s+use\s+F1,\s+EM,\s+and\s+Accuracy\s*\(Acc\),\s+"
     r"following\s+the\s+standard\s+evaluation\s+protocol\b", re.I,
 )
+GENERATOR_METHOD = re.compile(
+    r"\bregarding\s+the\s+LLMs\s+that\s+are\s+used\s+to\s+generate\s+answers,\s+we\s+use\s+the\s+"
+    r"(?P<series>[\w.-]+)\s+series\s+models(?:\s+\([^()]{1,120}\))?\s+of\s+"
+    r"(?P<first>\w+)\s+with\s+(?P<first_size>\d+[BM])\s+parameters\s+and\s+"
+    r"(?P<second>\w+)\s+with\s+(?P<second_size>\d+[BM])\s+parameters,\s+and\s+the\s+"
+    r"(?P<family>[\w.-]+)\s+model\s+\((?P<identifier>[\w.-]+)\)\.", re.I,
+)
 # The linked evaluator totals per-query scores and divides by the question count.
 # https://github.com/starsuzi/Adaptive-RAG/blob/main/evaluate_final_acc.py#L93-L119
 # https://github.com/starsuzi/Adaptive-RAG/blob/main/metrics/squad_answer_em_f1.py
@@ -34,9 +49,15 @@ EVALUATOR = re.compile(r"\bcode\s+is\s+available\s+at:\s*https://\s*github\.com/
 AVERAGE_SCOPE = re.compile(
     r"\b(?P<aggregate>Table\s+\d+(?:\.\d+)*)\s+shows?\s+(?:our\s+)?(?:main\s+)?results\s+"
     r"averaged\s+over\s+all\s+considered\s+datasets\b[^.!?]{0,450}[.!?]\s+"
-    r"(?:in\s+addition,\s*)?we\s+report\s+the\s+more\s+granular\s+results\b[^!?]{0,160}?"
+    rf"(?:in\s+addition,\s*)?we\s+report\s+the\s+more\s+granular\s+results\s+with\s+"
+    rf"(?P<detail_model>{COMPARISON_TITLE})\s+"
     r"\bon\s+each\s+of\s+the\s+\S+\s+and\s+\S+\s+datasets\s+in\s+"
     r"(?P<detail>Table\s+\d+(?:\.\d+)*)\b\.?", re.I,
+)
+TABLE_REFERENCE = re.compile(r"\bTable\s+\d+(?:\.\d+)*\b", re.I)
+APPENDIX_LINK = re.compile(
+    rf"\s*\(and\s+more\s+with\s+different\s+LLMs?\s+in\s+"
+    rf"(?P<tables>{TABLE_REFERENCE.pattern}(?:\s+and\s+{TABLE_REFERENCE.pattern})+)\s+of\s+Appendix\)", re.I,
 )
 DATASET_NAME = r"[\w./-]+(?:\s+[\w./-]+)*"
 DATASET_CITATION = rf"\d+\)\s+{DATASET_NAME}\s+\([^()]{{1,120}}\)"
@@ -116,7 +137,7 @@ def read_panel(page: Page, lines: list[str], index: int, label: str, caption: st
                                                  centers[start:start + len(METRICS)], strict=True))
 
     rows, end = read_panel_rows(lines, index + 1, prefix.start("method"), column_boundaries(centers))
-    if len(rows) < 2:
+    if sum(not MARKED_METHOD.search(method) for method, _ in rows) < 2:
         return None, index
     return Table(page, label, caption, index, columns, rows, family="qa_comparison"), end
 
@@ -130,6 +151,8 @@ def enrich_qa_comparisons(pages: list[Page], tables: list[Table]) -> list[Table]
     effectiveness = find_native(EFFECTIVENESS, native)
     linked_scores = effectiveness if find_native(EVALUATOR, native) else None
     averages = benchmark_averages(qa_tables, native)
+    exceptions = generator_exceptions(qa_tables, native)
+    documented_models = documented_generators(native)
     enriched = []
     for table in tables:
         if table.family != "qa_comparison":
@@ -137,7 +160,16 @@ def enrich_qa_comparisons(pages: list[Page], tables: list[Table]) -> list[Table]
             continue
         average = averages.get(" ".join(table.label.casefold().split()))
         columns = [enrich_qa_column(column, efficiency, linked_scores, average) for column in table.columns]
-        enriched.append(replace(table, columns=columns))
+        rows = [(row, values) for row, values in table.rows if not MARKED_METHOD.search(row)]
+        enriched.append(replace(table, columns=[canonical_generator(column, documented_models) for column in columns],
+                                rows=rows))
+        for row, values in table.rows:
+            models = exceptions.get((" ".join(table.label.casefold().split()), row.casefold()))
+            if not models or any(column.generator not in models for column in columns):
+                continue
+            marked_columns = [replace(column, generator=models[column.generator][0], generator_locator=column.generator,
+                                      generator_evidence=models[column.generator][1]) for column in columns]
+            enriched.append(replace(table, columns=marked_columns, rows=[(row, values)], config_name=row[:-1]))
     return enriched
 
 
@@ -147,6 +179,74 @@ def find_native(pattern: re.Pattern[str], pages: list[Page]) -> tuple[Page, re.M
             if match := pattern.search(text):
                 return page, match
     return None
+
+
+def documented_generators(pages: list[Page]) -> dict[str, tuple[str, tuple[Page, str]]]:
+    source = find_native(GENERATOR_METHOD, pages)
+    if not source:
+        return {}
+    page, match = source
+    evidence = page, match[0]
+    models = {}
+    for position in ("first", "second"):
+        model = f"{match['series']}-{match[position]}"
+        size = match[f"{position}_size"]
+        models[f"{model} ({size})".casefold()] = f"{model} {size}", evidence
+    family_prefix = f"{match['family'].casefold()}-"
+    identifier = match["identifier"].casefold()
+    if identifier.startswith(family_prefix):
+        edition = identifier.removeprefix(family_prefix).split("-")[0]
+        if edition:
+            models[f"{match['family']} ({edition})".casefold()] = match["identifier"], evidence
+    return models
+
+
+def canonical_generator(column: Column, models: dict[str, tuple[str, tuple[Page, str]]]) -> Column:
+    if column.generator and (documented := models.get(column.generator.casefold())):
+        model, evidence = documented
+        return replace(column, generator=model, generator_locator=column.generator, generator_evidence=evidence)
+    return column
+
+
+def generator_exceptions(tables: list[Table], pages: list[Page]) -> dict[
+        tuple[str, str], dict[str, tuple[str, tuple[Page, str]]]]:
+    exceptions = {}
+    for table in tables:
+        note = CAPTION_COMPARATORS.search(table.caption)
+        if not note or any(column.dataset for column in table.columns):
+            continue
+        comparators = {column.generator for column in table.columns if column.generator}
+        if note["reference"] not in comparators:
+            continue
+        literal = re.compile(r"\s+".join(re.escape(word) for word in note[0].split()))
+        source = find_native(literal, [table.page])
+        if not source:
+            continue
+        page, match = source
+        marked = note["marked"].casefold()
+        aggregate = " ".join(table.label.casefold().split())
+        models = {name: (note["first"] if name == note["reference"] else note["others"], (page, match[0]))
+                  for name in comparators}
+        exceptions[aggregate, marked] = models
+        for detail, allowed in linked_generators(pages, aggregate, comparators):
+            exceptions[detail, marked] = {name: models[name] for name in allowed}
+    return exceptions
+
+
+def linked_generators(pages: list[Page], aggregate: str, comparators: set[str]):
+    for page in pages:
+        text = page.reading_text or page.text
+        for match in AVERAGE_SCOPE.finditer(text):
+            if " ".join(match["aggregate"].casefold().split()) != aggregate:
+                continue
+            detail_model = " ".join(match["detail_model"].casefold().split())
+            detail_models = {name for name in comparators if detail_model in {name.casefold(), name.split(" (")[0].casefold()}}
+            if len(detail_models) != 1:
+                continue
+            yield " ".join(match["detail"].casefold().split()), detail_models
+            if appendix := APPENDIX_LINK.match(text, match.end()):
+                for reference in TABLE_REFERENCE.findall(appendix["tables"]):
+                    yield " ".join(reference.casefold().split()), comparators - detail_models
 
 
 def benchmark_averages(tables: list[Table], pages: list[Page]) -> dict[str, tuple[str, tuple[Page, str]]]:
@@ -210,8 +310,7 @@ def read_panel_rows(lines: list[str], start: int, method_at: int,
         method = aligned_label(line, method_at, value_at)
         if not method:
             break
-        if not MARKED_METHOD.search(method):
-            rows.append((method, values))
+        rows.append((method, values))
     else:
         end += 1
     return rows, end

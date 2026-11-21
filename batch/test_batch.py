@@ -112,9 +112,11 @@ class BatchTest(unittest.TestCase):
             tasks=[{"task_id": "t1", "task_type": "question answering"}],
             experiments=[{"experiment_id": "e1", "latency_ms": 0}],
             results=[
-                {"result": result, "normalized": {"value": 0, "unit": "fraction"}, "baseline": {"value": 0, "unit": "fraction"}},
-                {"result": dict(result, result_id="r2", duplicate_of="r1"), "normalized": {"value": 0, "unit": "fraction"}},
-                {"result": {"result_id": "r3", "result_origin": "cited", "cited_publication_id": "[1]",
+                {"extraction_mode": "python", "result": result,
+                 "normalized": {"value": 0, "unit": "fraction"}, "baseline": {"value": 0, "unit": "fraction"}},
+                {"extraction_mode": "python", "result": dict(result, result_id="r2", duplicate_of="r1"),
+                 "normalized": {"value": 0, "unit": "fraction"}},
+                {"extraction_mode": "python", "result": {"result_id": "r3", "result_origin": "cited", "cited_publication_id": "[1]",
                             "raw_value": "7", "reported_value": 7}, "normalized": None},
             ],
             evidence=[
@@ -183,6 +185,19 @@ class BatchTest(unittest.TestCase):
                         "D003: missing document", "duplicate corpus_id", "D004: unexpected document", "missing data"):
             self.assertIn(message, err)
         self.assertFalse(self.output.exists())
+
+    def test_convert_requires_explicit_python_mode_on_each_result(self):
+        included = detail(included=True)
+        for mode in (None, "mock"):
+            with self.subTest(mode=mode):
+                summary = {"result": {"result_id": "r1"}}
+                if mode is not None:
+                    summary["extraction_mode"] = mode
+                included["data"]["results"] = [summary]
+                code, _, err = self.cli("convert", self.export(included))
+                self.assertEqual(1, code)
+                self.assertIn(f"result with extraction_mode={mode!r}", err)
+                self.assertFalse(self.output.exists())
 
     def test_single_document_detail_and_existing_output(self):
         path = self.root / "detail.json"

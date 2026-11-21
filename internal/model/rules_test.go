@@ -82,21 +82,55 @@ func TestCrossPublicationComparisonUsesRAGCriteria(t *testing.T) {
 	left.DocumentID, right.DocumentID = "paper-a", "paper-b"
 	left.Publication = model.Record{"publication_id": "pub-a", "title": "Paper A"}
 	right.Publication = model.Record{"publication_id": "pub-b", "title": "Paper B"}
-	left.Experiment, right.Experiment = maps.Clone(left.Experiment), maps.Clone(right.Experiment)
-	left.Experiment["instrument"] = "solar simulator A"
-	right.Experiment["instrument"] = "solar simulator B"
-	left.Experiment["measurement_conditions"] = "AM1.5G"
-	right.Experiment["measurement_conditions"] = "AM0"
-
 	match := model.Compare(left, right)
 	if match.Status != model.Comparable || match.Numeric == nil {
-		t.Fatalf("RAG results matching task, dataset, metric, scale, and protocol expected comparable without physical-instrument fields, got: %+v", match)
+		t.Fatalf("RAG results matching task, dataset, metric, scale, and protocol expected comparable, got: %+v", match)
 	}
 	right.Experiment = maps.Clone(right.Experiment)
 	right.Experiment["evaluation_protocol"] = "a different benchmark protocol"
 	mismatch := model.Compare(left, right)
 	if mismatch.Status != model.NotComparable || mismatch.Numeric != nil {
 		t.Fatalf("different RAG evaluation protocols expected not_comparable without delta, got: %+v", mismatch)
+	}
+}
+
+func TestComparableGroupsRequireConfirmedPublicationPair(t *testing.T) {
+	importer, err := extract.NewImporter(sverka.ExtractorSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := importer.Prepare(sverka.MockExtraction, model.Document{ID: "demo", ExtractionMode: "mock"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, leftDOI, rightDOI, rightTitle, rightOrigin, rightMode string
+		want                                                        int
+	}{
+		{name: "same title with incomplete DOI", leftDOI: "10.1234/a", rightTitle: " paper  A "},
+		{name: "same DOI with different title", leftDOI: "doi:10.1234/A", rightDOI: "https://doi.org/10.1234/a", rightTitle: "Other title"},
+		{name: "different DOI with same title", leftDOI: "10.1234/a", rightDOI: "10.1234/b", rightTitle: "Paper A", want: 1},
+		{name: "different title with incomplete DOI", leftDOI: "10.1234/a", rightTitle: "Paper B", want: 1},
+		{name: "missing publication metadata", leftDOI: "10.1234/a"},
+		{name: "cited result", rightTitle: "Paper B", rightOrigin: "cited"},
+		{name: "different extraction mode", rightTitle: "Paper B", rightMode: "python"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left, right := data.ResultDetail(data.Results[0]), data.ResultDetail(data.Results[1])
+			left.Publication = model.Record{"publication_id": "pub-a", "title": "Paper A", "doi": tc.leftDOI}
+			right.Publication = model.Record{"publication_id": "pub-b", "title": tc.rightTitle, "doi": tc.rightDOI}
+			if tc.rightOrigin != "" {
+				right.Result = maps.Clone(right.Result)
+				right.Result["result_origin"] = tc.rightOrigin
+			}
+			if tc.rightMode != "" {
+				right.ExtractionMode = tc.rightMode
+			}
+			groups := model.ComparableGroups([]model.ResultDetail{left, right})
+			if len(groups) != tc.want {
+				t.Fatalf("group count expected: %d, got: %d", tc.want, len(groups))
+			}
+		})
 	}
 }
 

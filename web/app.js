@@ -589,7 +589,7 @@ function showResults(screen, params) {
 function showGroups(screen) {
   const content = element("div", "groups-content");
   WORKSPACE.append(screenHeading("Сопоставимые группы"),
-    element("p", "muted", "Здесь собраны результаты разных публикаций с совпавшими условиями измерения. Граф связей между статьями не строится."), content);
+    element("p", "muted", "Здесь собраны результаты разных публикаций с совпавшими условиями оценки RAG."), content);
   async function load() {
     content.replaceChildren(statePanel("Подбираем группы…", null, null, "loading"));
     try {
@@ -597,7 +597,7 @@ function showGroups(screen) {
       if (screen.signal.aborted) return;
       if (!groups.length) {
         content.replaceChildren(statePanel("Пока нет подтверждённых межстатейных групп",
-          "Для объединения нужны заполненные и совпадающие сведения о приборе, его характеристиках, условиях измерения и остальных критериях сравнения.",
+          "Для объединения должны совпасть задача, датасет и его версия, сплит, определение метрики, k, шкала, агрегация и протокол оценки.",
           link("К документам", "#documents", "button button-secondary")));
         return;
       }
@@ -609,7 +609,7 @@ function showGroups(screen) {
           element("span", "mono", item.normalized ? measured(item.normalized) : item.raw_value || UNKNOWN)));
         const members = element("ul", "group-results", ...entries);
         const first = group.results[0];
-        const second = group.results.find((item) => item.publication_id !== first.publication_id);
+        const second = group.results[1];
         return element("section", "panel group-card",
           element("div", "section-heading", element("div", "section-title",
             element("h2", "", first.metric_name), element("span", "section-count", `${group.results.length} результатов`))),

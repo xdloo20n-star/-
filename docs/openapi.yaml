@@ -121,7 +121,7 @@ paths:
   /api/v1/groups:
     get:
       operationId: listComparableGroups
-      description: Returns cross-publication result groups only when every pair passes the comparison rules. No publication relationship graph is produced.
+      description: Groups primary extracted numeric results with matching RAG criteria and extraction mode. The first two results represent distinct publications identified by DOI or title.
       responses:
         '200':
           description: Confirmed comparable groups, ordered by stable group ID

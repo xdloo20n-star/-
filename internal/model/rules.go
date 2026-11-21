@@ -157,29 +157,6 @@ func Compare(left, right ResultDetail) Comparison {
 	return comparison
 }
 
-func differentPublications(left, right ResultDetail) bool {
-	leftDOI, rightDOI := key(left.Publication.Text("doi")), key(right.Publication.Text("doi"))
-	if leftDOI != "" && rightDOI != "" {
-		return normalizeDOI(leftDOI) != normalizeDOI(rightDOI)
-	}
-	leftTitle, rightTitle := key(left.Publication.Text("title")), key(right.Publication.Text("title"))
-	if leftTitle != "" && rightTitle != "" {
-		return leftTitle != rightTitle
-	}
-	leftID, rightID := left.Publication.Text("publication_id"), right.Publication.Text("publication_id")
-	if leftID != "" && rightID != "" {
-		return leftID != rightID
-	}
-	return left.DocumentID != right.DocumentID
-}
-
-func normalizeDOI(value string) string {
-	for _, prefix := range []string{"https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "doi.org/", "doi:"} {
-		value = strings.TrimPrefix(value, prefix)
-	}
-	return strings.TrimRight(strings.TrimSpace(value), ".,; ")
-}
-
 func compareText(name, label, left, right string) Criterion {
 	switch {
 	case key(left) == "" || key(right) == "":

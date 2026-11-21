@@ -24,6 +24,9 @@ RESULT_FIELDS = (
     "raw_value", "raw_unit", "metric_name", "metric_variant", "metric_k", "aggregation",
     "source_page", "source_table", "source_figure",
 )
+SOURCE_FIELDS = ("raw_value", "raw_unit", "metric_name", "metric_k", "metric_variant", "aggregation",
+                 "source_page", "source_table", "source_figure")
+DIAGNOSTIC_FIELDS = SOURCE_FIELDS[1:]
 DECIMAL = re.compile(r"([+-]?)([0-9]*)(?:\.([0-9]+))? *(%?)")
 INTEGER = re.compile(r"[0-9]+")
 INLINE_CUTOFF = re.compile(r"\s*@\s*([0-9]+)(?![\w.])")
@@ -243,19 +246,48 @@ def agreement(matches, gold, candidate):
     }
 
 
-def scope_report(gold, candidate, publication_id, decisions, scope):
+def flatten_source_keys(counter):
+    return {(value, unit, *metric, page, table, figure): n
+            for (value, unit, metric, page, table, figure), n in counter.items()}
+
+
+def project_source_keys(counter, offset):
+    projected = Counter()
+    for key, count in counter.items():
+        projected[key[:offset] + key[offset + 1:]] += count
+    return projected
+
+
+def additional_matches_by_field(gold, candidate, strict):
+    # Keep exact matches fixed. Each projection only compares the unmatched rows.
+    gold_rest = flatten_source_keys(gold - strict)
+    candidate_rest = flatten_source_keys(candidate - strict)
+    counts = dict.fromkeys(DIAGNOSTIC_FIELDS, 0)
+    if gold_rest and candidate_rest:
+        for offset, field in enumerate(DIAGNOSTIC_FIELDS, start=1):
+            gold_projected = project_source_keys(gold_rest, offset)
+            candidate_projected = project_source_keys(candidate_rest, offset)
+            counts[field] = (gold_projected & candidate_projected).total()
+    return counts
+
+
+def scope_report(gold, candidate, publication_id, decisions, scope, diagnostics):
     in_gold = publication_id in gold.publications
     gold_counts, gold_source, gold_context = scoped_records(gold, publication_id, decisions["gold"], scope, in_gold)
     candidate_counts, candidate_source, candidate_context = scoped_records(
         candidate, publication_id, decisions["candidate"], scope, in_gold)
     denominators = gold_counts["eligible"], candidate_counts["eligible"]
-    return {
+    strict = gold_source & candidate_source
+    report = {
         "gold": gold_counts,
         "candidate": candidate_counts,
-        "source_agreement": agreement((gold_source & candidate_source).total(), *denominators) if in_gold else None,
+        "source_agreement": agreement(strict.total(), *denominators) if in_gold else None,
         "context_agreement": agreement((gold_context & candidate_context).total(), *denominators)
         if in_gold and gold.has_context and candidate.has_context else None,
     }
+    if diagnostics:
+        report["additional_matches_by_field"] = additional_matches_by_field(gold_source, candidate_source, strict) if in_gold else None
+    return report
 
 
 def sum_counts(papers, side):
@@ -274,13 +306,13 @@ def corpus_agreement(papers, key, gold_count, candidate_count):
     }
 
 
-def corpus_scope(documents, expected, unexpected, scope, has_context):
+def corpus_scope(documents, expected, unexpected, scope, has_context, diagnostics):
     papers = [documents[publication_id]["scopes"][scope] for publication_id in expected]
     extras = [documents[publication_id]["scopes"][scope] for publication_id in unexpected]
     gold = sum_counts(papers, "gold")
     candidate = sum_counts(papers, "candidate")
     denominators = gold["eligible"], candidate["eligible"]
-    return {
+    report = {
         "gold": gold,
         "candidate": candidate,
         "candidate_outside_gold": sum_counts(extras, "candidate"),
@@ -289,9 +321,15 @@ def corpus_scope(documents, expected, unexpected, scope, has_context):
         "source_agreement": corpus_agreement(papers, "source_agreement", *denominators),
         "context_agreement": corpus_agreement(papers, "context_agreement", *denominators) if has_context else None,
     }
+    if diagnostics:
+        report["additional_matches_by_field"] = {
+            field: sum(paper["additional_matches_by_field"][field] for paper in papers)
+            for field in DIAGNOSTIC_FIELDS
+        }
+    return report
 
 
-def evaluate(gold, candidate):
+def evaluate(gold, candidate, *, diagnostics=False):
     expected = sorted(gold.publications)
     present = sorted(gold.publications.keys() & candidate.publications.keys())
     missing = sorted(gold.publications.keys() - candidate.publications.keys())
@@ -302,9 +340,9 @@ def evaluate(gold, candidate):
                  "candidate": publication_report(candidate, publication_id)}
         decisions = {side: info["decision"] for side, info in sides.items()}
         documents[publication_id] = {**sides, "in_gold": publication_id in gold.publications, "scopes": {
-            scope: scope_report(gold, candidate, publication_id, decisions, scope) for scope in SCOPES
+            scope: scope_report(gold, candidate, publication_id, decisions, scope, diagnostics) for scope in SCOPES
         }}
-    return {
+    report = {
         "report_version": 1,
         "interpretation": AGREEMENT_LABEL,
         "scoring": {
@@ -327,11 +365,18 @@ def evaluate(gold, candidate):
                                             documents[publication_id]["candidate"]["decision"]],
             },
             "context_tables_available": {"gold": gold.has_context, "candidate": candidate.has_context},
-            "scopes": {scope: corpus_scope(documents, expected, unexpected, scope, gold.has_context and candidate.has_context)
+            "scopes": {scope: corpus_scope(documents, expected, unexpected, scope,
+                                         gold.has_context and candidate.has_context, diagnostics)
                        for scope in SCOPES},
         },
         "documents": documents,
     }
+    if diagnostics:
+        report["scoring"]["additional_matches_by_field"] = (
+            "One-to-one matches gained by ignoring one field at a time after exact matching. "
+            "Counts can overlap across fields and do not affect precision, recall or F1."
+        )
+    return report
 
 
 def percent(value):
@@ -350,6 +395,13 @@ def counts_text(scope):
 
 def paper_score_text(name, score):
     return f"{name} unavailable" if score is None else f"{name} {score['matches']} matches, P/R/F1 {ratios_text(score)}"
+
+
+def print_diagnostics(scope, indent):
+    if (counts := scope.get("additional_matches_by_field")) is not None:
+        entries = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        positive = ", ".join(f"{field} +{count}" for field, count in entries if count)
+        print(f"{indent}Additional matches when ignoring one field: {positive or 'none'}")
 
 
 def print_report(report):
@@ -375,6 +427,7 @@ def print_report(report):
                 continue
             print(f"  {paper_score_text(score_label + ' micro', scores['micro'])}")
             print(f"  {score_label} macro ({scores['macro']['papers']} papers), P/R/F1 {ratios_text(scores['macro'])}")
+        print_diagnostics(scope, "  ")
     for publication_id, paper in report["documents"].items():
         gold = paper["gold"]["decision"] if paper["in_gold"] else "outside gold"
         print(f"\n{publication_id} gold {gold}, candidate {paper['candidate']['decision']}")
@@ -387,6 +440,7 @@ def print_report(report):
             if paper["in_gold"]:
                 print(f"    {paper_score_text('Source', scope['source_agreement'])}. "
                       f"{paper_score_text('Context', scope['context_agreement'])}.")
+                print_diagnostics(scope, "    ")
 
 
 def main(argv=None):
@@ -396,12 +450,14 @@ def main(argv=None):
     source.add_argument("--gold", type=Path, help="extracted dev_gold CSV folder")
     source.add_argument("--corpus-zip", type=Path, help="organizer archive containing dev_gold/")
     parser.add_argument("--json-report", metavar="PATH", help="write JSON to PATH, or use '-' for JSON on stdout")
+    parser.add_argument("--diagnostics", action="store_true",
+                        help="count additional matches when ignoring one source field at a time")
     args = parser.parse_args(argv)
     try:
         gold = read_directory(args.gold) if args.gold else read_gold_zip(args.corpus_zip)
         if not gold.publications:
             raise ValueError("gold publications.csv has no PDFs")
-        report = evaluate(gold, read_directory(args.candidate))
+        report = evaluate(gold, read_directory(args.candidate), diagnostics=args.diagnostics)
         if args.json_report:
             payload = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
             if args.json_report == "-":

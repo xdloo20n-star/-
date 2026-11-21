@@ -58,12 +58,14 @@ python3 -m batch.evaluate /path/to/dev-submission \
   --corpus-zip ../drive-download-20261120T125610Z-1-001.zip
 
 python3 -m batch.evaluate /path/to/dev-submission \
-  --gold /path/to/dev_gold --json-report report.json
+  --gold /path/to/dev_gold --diagnostics --json-report report.json
 
 python3 -m unittest batch.test_evaluate -v
 ```
 
 The evaluator reads the CSVs locally with the standard library. `--json-report -` emits JSON on stdout for piping. A report file adds JSON alongside the usual text output. The same CSVs produce the same report through the archive and directory inputs.
+
+`--diagnostics` adds counts of matches gained by ignoring one source field at a time. The report compares unmatched rows in the same PDF and keeps each row eligible for at most one match per field. Counts for different fields may overlap. Precision, recall and F1 continue to use the strict keys.
 
 PDF coverage comes from `publications.csv` and includes excluded publications. Missing gold PDFs contribute zero candidate records. Candidate PDFs outside gold are listed with their row counts and sit outside the agreement denominators. Each paper shows its inclusion decision and counts of extracted, absent, present-but-unextractable and marked duplicate rows. The denominators use canonical `extracted` rows on each side's included PDFs within the gold set. A marked duplicate must refer to a canonical extracted row in the same publication. Rows on excluded publications are counted separately. Unmarked rows with the same key retain their multiplicity.
 

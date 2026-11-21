@@ -191,17 +191,45 @@ class BenchmarkTests(unittest.TestCase):
                 result("r1", duplicate_of="r2"), result("r2", "D002"),
             ])
 
+    def test_diagnostics_keep_exact_matches_and_count_each_projection_one_to_one(self):
+        publications = [publication("D001"), publication("D002")]
+        gold = fixtures(publications, [
+            result("r1", aggregation="mean"), result("r2", aggregation="std"),
+            result("r3", aggregation="std"),
+            result("r4", "D002", raw_value="0.7", source_table="Table 8"),
+            result("r5", raw_value="0.8", raw_unit="%", metric_variant="micro"),
+        ])
+        candidate = fixtures(publications + [publication("P001")], [
+            result("c1", aggregation="mean"), result("c2", aggregation="median"),
+            result("c3", "D002", raw_value="0.7", source_table="Table 9"),
+            result("c4", raw_value="0.8", raw_unit="fraction", metric_variant="macro"),
+            result("c5", "P001", aggregation="std"),
+        ])
+        strict = benchmark.evaluate(gold, candidate)
+        report = benchmark.evaluate(gold, candidate, diagnostics=True)
+        for name, scope in report["corpus"]["scopes"].items():
+            self.assertEqual(strict["corpus"]["scopes"][name]["source_agreement"], scope["source_agreement"])
+            gains = dict.fromkeys(benchmark.DIAGNOSTIC_FIELDS, 0) | {"aggregation": 1, "source_table": 1}
+            self.assertEqual(gains, scope["additional_matches_by_field"])
+        scopes = {pdf: item["scopes"]["table_only"] for pdf, item in report["documents"].items()}
+        self.assertEqual(1, scopes["D001"]["additional_matches_by_field"]["aggregation"])
+        self.assertEqual(1, scopes["D002"]["additional_matches_by_field"]["source_table"])
+        self.assertIsNone(scopes["P001"]["additional_matches_by_field"])
+
     def test_cli_json_stdout(self):
         gold = fixtures([publication("D001")], [result("r1")])
         candidate = fixtures([publication("D001")], [])
         with (patch.object(benchmark, "read_gold_zip", return_value=gold),
               patch.object(benchmark, "read_directory", return_value=candidate),
               contextlib.redirect_stdout(io.StringIO()) as stdout):
-            self.assertEqual(benchmark.main(["candidate", "--corpus-zip", "archive.zip", "--json-report", "-"]), 0)
+            self.assertEqual(benchmark.main(["candidate", "--corpus-zip", "archive.zip", "--diagnostics",
+                                             "--json-report", "-"]), 0)
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["corpus"]["coverage"]["pdf_coverage"], 1)
         self.assertEqual(payload["corpus"]["scopes"]["all_results"]["source_agreement"]["micro"],
                          benchmark.agreement(0, 1, 0))
+        self.assertEqual(dict.fromkeys(benchmark.DIAGNOSTIC_FIELDS, 0),
+                         payload["corpus"]["scopes"]["all_results"]["additional_matches_by_field"])
 
 
 if __name__ == "__main__":

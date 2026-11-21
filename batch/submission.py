@@ -213,7 +213,7 @@ def add_document(rows, corpus_id, detail):
 
     result_ids = set()
     for summary in records(data, "results"):
-        mode = summary.get("extraction_mode", "python")
+        mode = summary.get("extraction_mode")
         if mode != "python":
             raise ValueError(f"python document has a result with extraction_mode={mode!r}")
         if summary.get("document_id", detail["document"].get("document_id")) != detail["document"].get("document_id"):

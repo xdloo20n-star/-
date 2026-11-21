@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"sverka"
@@ -39,6 +40,27 @@ func TestBackfillBaselinesUpdatesStoredSnapshotsAndResultIndex(t *testing.T) {
 	data.Results[0].Result["aggregation"] = "median"
 	data.Results[1].Baseline = nil
 	if err := db.Complete(ctx, doc.ID, data); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.ExecContext(ctx, `CREATE TRIGGER fail_index_update BEFORE UPDATE ON results
+		BEGIN SELECT RAISE(ABORT, 'test index update failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrate(ctx, db.db); err == nil || !strings.Contains(err.Error(), "test index update failure") {
+		t.Fatalf("migration expected: index update failure, got: %v", err)
+	}
+	version := 0
+	if err := db.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	rolledBack, err := db.DocumentDetail(ctx, doc.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if version != 1 || len(rolledBack.Data.Issues) != 0 {
+		t.Fatalf("rollback expected: version 1 and no warnings, got version %d and %+v", version, rolledBack.Data.Issues)
+	}
+	if _, err := db.db.ExecContext(ctx, "DROP TRIGGER fail_index_update"); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

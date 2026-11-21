@@ -27,8 +27,18 @@ type ComparableGroup struct {
 	Results        []GroupResult `json:"results"`
 }
 
-// AppendGroupCandidates builds the comparison context without loading sources or issues.
-func (data DocumentData) AppendGroupCandidates(details []ResultDetail) []ResultDetail {
+// GroupCandidates gathers comparable results and publication identities.
+type GroupCandidates struct {
+	details []ResultDetail
+	aliases publicationTitleAliases
+}
+
+// AddDocument includes publication metadata even when there are no comparable results.
+func (c *GroupCandidates) AddDocument(mode string, data DocumentData) {
+	if c.aliases == nil {
+		c.aliases = make(publicationTitleAliases)
+	}
+	c.aliases.add(mode, data.Publication)
 	datasets := recordsByID(data.Datasets, "dataset_id")
 	tasks := recordsByID(data.Tasks, "task_id")
 	experiments := recordsByID(data.Experiments, "experiment_id")
@@ -37,7 +47,7 @@ func (data DocumentData) AppendGroupCandidates(details []ResultDetail) []ResultD
 			continue
 		}
 		result := summary.Result
-		details = append(details, ResultDetail{
+		c.details = append(c.details, ResultDetail{
 			ResultSummary: summary,
 			Publication:   data.Publication,
 			Dataset:       datasets[result.Text("dataset_id")],
@@ -45,7 +55,6 @@ func (data DocumentData) AppendGroupCandidates(details []ResultDetail) []ResultD
 			Experiment:    experiments[result.Text("experiment_id")],
 		})
 	}
-	return details
 }
 
 func recordsByID(records []Record, field string) map[string]Record {
@@ -63,16 +72,11 @@ func groupCandidate(summary ResultSummary) bool {
 
 type groupKey [11]string
 
-// ComparableGroups groups primary numeric results with matching RAG criteria.
-func ComparableGroups(details []ResultDetail) []ComparableGroup {
-	// A publication can supply a title alias even when its results have different comparison criteria.
-	aliases := collectPublicationTitleAliases(details)
+// Groups returns primary numeric results grouped by matching RAG criteria.
+func (c GroupCandidates) Groups() []ComparableGroup {
 	buckets := map[groupKey][]ResultDetail{}
-	for _, detail := range details {
-		if !groupCandidate(detail.ResultSummary) {
-			continue
-		}
-		if publicationDOI(detail) == "" && key(detail.Publication.Text("title")) == "" {
+	for _, detail := range c.details {
+		if publicationDOI(detail.Publication) == "" && key(detail.Publication.Text("title")) == "" {
 			continue
 		}
 		if fingerprint, ok := groupFingerprint(detail); ok {
@@ -88,7 +92,7 @@ func ComparableGroups(details []ResultDetail) []ComparableGroup {
 		sort.Slice(bucket, func(i, j int) bool {
 			return bucket[i].Result.Text("result_id") < bucket[j].Result.Text("result_id")
 		})
-		first, second, ok := distinctPublicationPair(bucket, aliases)
+		first, second, ok := distinctPublicationPair(bucket, c.aliases)
 		if !ok {
 			continue
 		}
@@ -167,28 +171,21 @@ type publicationTitle struct {
 // An empty DOI marks a title associated with multiple distinct DOIs.
 type publicationTitleAliases map[publicationTitle]string
 
-func collectPublicationTitleAliases(details []ResultDetail) publicationTitleAliases {
-	aliases := make(publicationTitleAliases)
-	for _, detail := range details {
-		if !groupCandidate(detail.ResultSummary) {
-			continue
-		}
-		title, doi := key(detail.Publication.Text("title")), publicationDOI(detail)
-		if title == "" || doi == "" {
-			continue
-		}
-		alias := publicationTitle{mode: detail.ExtractionMode, title: title}
-		if previous, found := aliases[alias]; found && previous != doi {
-			aliases[alias] = ""
-		} else {
-			aliases[alias] = doi
-		}
+func (aliases publicationTitleAliases) add(mode string, publication Record) {
+	title, doi := key(publication.Text("title")), publicationDOI(publication)
+	if title == "" || doi == "" {
+		return
 	}
-	return aliases
+	alias := publicationTitle{mode: mode, title: title}
+	if previous, found := aliases[alias]; found && previous != doi {
+		aliases[alias] = ""
+	} else {
+		aliases[alias] = doi
+	}
 }
 
 func (aliases publicationTitleAliases) identity(detail ResultDetail) (doi, title string) {
-	doi, title = publicationDOI(detail), key(detail.Publication.Text("title"))
+	doi, title = publicationDOI(detail.Publication), key(detail.Publication.Text("title"))
 	if doi != "" {
 		return doi, title
 	}
@@ -226,8 +223,8 @@ func distinctPublicationPair(bucket []ResultDetail, aliases publicationTitleAlia
 	return 0, 0, false
 }
 
-func publicationDOI(detail ResultDetail) string {
-	value := key(detail.Publication.Text("doi"))
+func publicationDOI(publication Record) string {
+	value := key(publication.Text("doi"))
 	for _, prefix := range []string{"doi:", "https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "http://dx.doi.org/", "doi.org/"} {
 		value = strings.TrimSpace(strings.TrimPrefix(value, prefix))
 	}

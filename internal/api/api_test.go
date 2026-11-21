@@ -376,3 +376,42 @@ func TestComparableGroupsEndpointGroupsResultsFromDistinctPublications(t *testin
 		t.Fatalf("group configuration names expected Dense and Hybrid, got: %+v", configurations)
 	}
 }
+
+func TestComparableGroupsEndpointUsesDOIFromDocumentWithoutResults(t *testing.T) {
+	type publication struct {
+		title string
+		doi   any
+	}
+	source := testExtractor(func(_ context.Context, path string) ([]byte, error) {
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		kind := strings.TrimPrefix(string(content), "%PDF-1.7\n")
+		versions := map[string]publication{
+			"metadata-only": {title: "Paper A", doi: "10.1234/x"},
+			"other-title":   {title: "Paper B", doi: "10.1234/x"},
+			"missing-doi":   {title: "Paper A"},
+		}
+		var fixture map[string]any
+		if err := json.Unmarshal(sverka.MockExtraction, &fixture); err != nil {
+			return nil, err
+		}
+		pub := fixture["publication"].(map[string]any)
+		pub["title"], pub["doi"] = versions[kind].title, versions[kind].doi
+		if kind == "metadata-only" {
+			fixture["results"], fixture["evidence"] = []any{}, []any{}
+		}
+		return json.Marshal(fixture)
+	})
+	h := newHarness(t, source, time.Second)
+	h.startWorker(t)
+	for _, kind := range []string{"metadata-only", "other-title", "missing-doi"} {
+		doc := decode[model.Document](t, upload(t, h, "%PDF-1.7\n"+kind, http.StatusAccepted))
+		waitFor(t, h, doc.ID, model.Completed)
+	}
+	response := decode[struct {
+		Groups []model.ComparableGroup `json:"groups"`
+	}](t, request(t, http.MethodGet, h.url+"/api/v1/groups", "", nil, http.StatusOK))
+	equal(t, "groups for one publication", 0, len(response.Groups))
+}

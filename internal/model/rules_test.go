@@ -94,6 +94,20 @@ func TestCrossPublicationComparisonUsesRAGCriteria(t *testing.T) {
 	}
 }
 
+func groupsForResults(details []model.ResultDetail) []model.ComparableGroup {
+	var candidates model.GroupCandidates
+	for _, detail := range details {
+		candidates.AddDocument(detail.ExtractionMode, model.DocumentData{
+			Publication: detail.Publication,
+			Results:     []model.ResultSummary{detail.ResultSummary},
+			Datasets:    []model.Record{detail.Dataset},
+			Tasks:       []model.Record{detail.Task},
+			Experiments: []model.Record{detail.Experiment},
+		})
+	}
+	return candidates.Groups()
+}
+
 func TestComparableGroupsRequireConfirmedPublicationPair(t *testing.T) {
 	importer, err := extract.NewImporter(sverka.ExtractorSchema)
 	if err != nil {
@@ -126,7 +140,7 @@ func TestComparableGroupsRequireConfirmedPublicationPair(t *testing.T) {
 			if tc.rightMode != "" {
 				right.ExtractionMode = tc.rightMode
 			}
-			groups := model.ComparableGroups([]model.ResultDetail{left, right})
+			groups := groupsForResults([]model.ResultDetail{left, right})
 			if len(groups) != tc.want {
 				t.Fatalf("group count expected: %d, got: %d", tc.want, len(groups))
 			}
@@ -224,7 +238,7 @@ func TestComparableGroupsResolvePublicationTitleAliases(t *testing.T) {
 				}
 				details = append(details, detail)
 			}
-			groups := model.ComparableGroups(details)
+			groups := groupsForResults(details)
 			if tc.wantMembers == 0 {
 				if len(groups) != 0 {
 					t.Fatalf("expected no cross-publication groups, got: %+v", groups)
@@ -253,14 +267,14 @@ func TestComparableGroupsUseRAGCriteriaAndDistinctPublications(t *testing.T) {
 		t.Fatal(err)
 	}
 	left, right := data.ResultDetail(data.Results[0]), data.ResultDetail(data.Results[1])
-	if groups := model.ComparableGroups([]model.ResultDetail{left, right}); len(groups) != 0 {
+	if groups := groupsForResults([]model.ResultDetail{left, right}); len(groups) != 0 {
 		t.Fatalf("same-publication rows expected no cross-publication groups, got: %+v", groups)
 	}
 	left.DocumentID, right.DocumentID = "paper-a", "paper-b"
 	left.Publication = model.Record{"publication_id": "pub-a", "title": "Paper A"}
 	right.Publication = model.Record{"publication_id": "pub-b", "title": "Paper B"}
 	left.ExtractionMode, right.ExtractionMode = "python", "python"
-	groups := model.ComparableGroups([]model.ResultDetail{left, right})
+	groups := groupsForResults([]model.ResultDetail{left, right})
 	if len(groups) != 1 || len(groups[0].Results) != 2 {
 		t.Fatalf("RAG results matching task, dataset, metric, and protocol expected one two-result group, got: %+v", groups)
 	}
@@ -269,7 +283,7 @@ func TestComparableGroupsUseRAGCriteriaAndDistinctPublications(t *testing.T) {
 	}
 	right.Experiment = maps.Clone(right.Experiment)
 	right.Experiment["evaluation_protocol"] = "a different protocol"
-	if groups := model.ComparableGroups([]model.ResultDetail{left, right}); len(groups) != 0 {
+	if groups := groupsForResults([]model.ResultDetail{left, right}); len(groups) != 0 {
 		t.Fatalf("different RAG protocols expected no group, got: %+v", groups)
 	}
 }

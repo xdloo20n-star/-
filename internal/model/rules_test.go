@@ -134,6 +134,115 @@ func TestComparableGroupsRequireConfirmedPublicationPair(t *testing.T) {
 	}
 }
 
+func TestComparableGroupsResolvePublicationTitleAliases(t *testing.T) {
+	importer, err := extract.NewImporter(sverka.ExtractorSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := importer.Prepare(sverka.MockExtraction, model.Document{ID: "demo", ExtractionMode: "mock"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := data.ResultDetail(data.Results[0])
+	type paper struct {
+		id, title, doi string
+		otherProtocol  bool
+		python         bool
+	}
+	for _, tc := range []struct {
+		name        string
+		papers      []paper
+		wantPair    [2]string
+		wantMembers int
+	}{
+		{
+			name: "three records for the same DOI with different titles",
+			papers: []paper{
+				{id: "a", title: "Paper A", doi: "10.1234/x"},
+				{id: "b", title: "Paper B", doi: "https://doi.org/10.1234/X"},
+				{id: "c", title: " paper  A "},
+			},
+		},
+		{
+			name: "same DOI resolved by a candidate with another protocol",
+			papers: []paper{
+				{id: "a", title: "Paper A", doi: "10.1234/x", otherProtocol: true},
+				{id: "b", title: "Paper B", doi: "10.1234/x"},
+				{id: "c", title: "Paper A"},
+			},
+		},
+		{
+			name: "unique alias establishes a distinct DOI across protocols",
+			papers: []paper{
+				{id: "a", title: "Paper A", doi: "10.1234/x", otherProtocol: true},
+				{id: "b", doi: "10.1234/y"},
+				{id: "c", title: "Paper A"},
+			},
+			wantPair: [2]string{"b", "c"}, wantMembers: 2,
+		},
+		{
+			name: "ambiguous title across protocols cannot establish a pair",
+			papers: []paper{
+				{id: "a", title: "Paper A", doi: "10.1234/x", otherProtocol: true},
+				{id: "b", title: "Paper A", doi: "10.1234/y", otherProtocol: true},
+				{id: "c", title: "Paper A"},
+				{id: "d", title: "Paper B", doi: "10.1234/z"},
+			},
+		},
+		{
+			name: "distinct explicit DOIs confirm a group with an ambiguous member",
+			papers: []paper{
+				{id: "a", title: "Paper A"},
+				{id: "b", title: "Paper A", doi: "10.1234/x"},
+				{id: "c", title: "Paper A", doi: "10.1234/y"},
+			},
+			wantPair: [2]string{"b", "c"}, wantMembers: 3,
+		},
+		{
+			name: "mock DOI does not resolve a title in Python results",
+			papers: []paper{
+				{id: "a", title: "Paper A", doi: "10.1234/x"},
+				{id: "b", doi: "10.1234/y", python: true},
+				{id: "c", title: "Paper A", python: true},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			details := make([]model.ResultDetail, 0, len(tc.papers))
+			for _, paper := range tc.papers {
+				detail := base
+				detail.DocumentID = paper.id
+				detail.Publication = model.Record{"publication_id": paper.id, "title": paper.title, "doi": paper.doi}
+				detail.Result = maps.Clone(base.Result)
+				detail.Result["result_id"] = paper.id
+				if paper.python {
+					detail.ExtractionMode = "python"
+				}
+				if paper.otherProtocol {
+					detail.Experiment = maps.Clone(base.Experiment)
+					detail.Experiment["evaluation_protocol"] = "another protocol for " + paper.id
+				}
+				details = append(details, detail)
+			}
+			groups := model.ComparableGroups(details)
+			if tc.wantMembers == 0 {
+				if len(groups) != 0 {
+					t.Fatalf("expected no cross-publication groups, got: %+v", groups)
+				}
+				return
+			}
+			if len(groups) != 1 || len(groups[0].Results) != tc.wantMembers {
+				t.Fatalf("expected one group with %d results, got: %+v", tc.wantMembers, groups)
+			}
+			results := groups[0].Results
+			pair := [2]string{results[0].ResultID, results[1].ResultID}
+			if pair != tc.wantPair {
+				t.Fatalf("expected first pair %v, got %v", tc.wantPair, pair)
+			}
+		})
+	}
+}
+
 func TestComparableGroupsUseRAGCriteriaAndDistinctPublications(t *testing.T) {
 	importer, err := extract.NewImporter(sverka.ExtractorSchema)
 	if err != nil {
@@ -150,9 +259,13 @@ func TestComparableGroupsUseRAGCriteriaAndDistinctPublications(t *testing.T) {
 	left.DocumentID, right.DocumentID = "paper-a", "paper-b"
 	left.Publication = model.Record{"publication_id": "pub-a", "title": "Paper A"}
 	right.Publication = model.Record{"publication_id": "pub-b", "title": "Paper B"}
+	left.ExtractionMode, right.ExtractionMode = "python", "python"
 	groups := model.ComparableGroups([]model.ResultDetail{left, right})
 	if len(groups) != 1 || len(groups[0].Results) != 2 {
 		t.Fatalf("RAG results matching task, dataset, metric, and protocol expected one two-result group, got: %+v", groups)
+	}
+	if groups[0].ExtractionMode != "python" {
+		t.Fatalf("expected group extraction mode python, got %q", groups[0].ExtractionMode)
 	}
 	right.Experiment = maps.Clone(right.Experiment)
 	right.Experiment["evaluation_protocol"] = "a different protocol"

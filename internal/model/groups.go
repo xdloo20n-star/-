@@ -21,9 +21,10 @@ type GroupResult struct {
 }
 
 type ComparableGroup struct {
-	GroupID  string        `json:"group_id"`
-	Criteria []Criterion   `json:"criteria"`
-	Results  []GroupResult `json:"results"`
+	GroupID        string        `json:"group_id"`
+	ExtractionMode string        `json:"extraction_mode"`
+	Criteria       []Criterion   `json:"criteria"`
+	Results        []GroupResult `json:"results"`
 }
 
 // AppendGroupCandidates builds the comparison context without loading sources or issues.
@@ -64,6 +65,8 @@ type groupKey [11]string
 
 // ComparableGroups groups primary numeric results with matching RAG criteria.
 func ComparableGroups(details []ResultDetail) []ComparableGroup {
+	// A publication can supply a title alias even when its results have different comparison criteria.
+	aliases := collectPublicationTitleAliases(details)
 	buckets := map[groupKey][]ResultDetail{}
 	for _, detail := range details {
 		if !groupCandidate(detail.ResultSummary) {
@@ -85,7 +88,7 @@ func ComparableGroups(details []ResultDetail) []ComparableGroup {
 		sort.Slice(bucket, func(i, j int) bool {
 			return bucket[i].Result.Text("result_id") < bucket[j].Result.Text("result_id")
 		})
-		first, second, ok := distinctPublicationPair(bucket)
+		first, second, ok := distinctPublicationPair(bucket, aliases)
 		if !ok {
 			continue
 		}
@@ -115,7 +118,10 @@ func ComparableGroups(details []ResultDetail) []ComparableGroup {
 		members[1], members[second] = members[second], members[1]
 		sum := sha256.Sum256([]byte(strings.Join(ids, "\n") + "\n"))
 		groups = append(groups, ComparableGroup{
-			GroupID: "group_" + hex.EncodeToString(sum[:8]), Criteria: comparison.Criteria, Results: members,
+			GroupID:        "group_" + hex.EncodeToString(sum[:8]),
+			ExtractionMode: bucket[first].ExtractionMode,
+			Criteria:       comparison.Criteria,
+			Results:        members,
 		})
 	}
 	sort.Slice(groups, func(i, j int) bool { return groups[i].GroupID < groups[j].GroupID })
@@ -154,14 +160,53 @@ func groupFingerprint(detail ResultDetail) (groupKey, bool) {
 	return values, true
 }
 
-func distinctPublicationPair(bucket []ResultDetail) (int, int, bool) {
+type publicationTitle struct {
+	mode, title string
+}
+
+// An empty DOI marks a title associated with multiple distinct DOIs.
+type publicationTitleAliases map[publicationTitle]string
+
+func collectPublicationTitleAliases(details []ResultDetail) publicationTitleAliases {
+	aliases := make(publicationTitleAliases)
+	for _, detail := range details {
+		if !groupCandidate(detail.ResultSummary) {
+			continue
+		}
+		title, doi := key(detail.Publication.Text("title")), publicationDOI(detail)
+		if title == "" || doi == "" {
+			continue
+		}
+		alias := publicationTitle{mode: detail.ExtractionMode, title: title}
+		if previous, found := aliases[alias]; found && previous != doi {
+			aliases[alias] = ""
+		} else {
+			aliases[alias] = doi
+		}
+	}
+	return aliases
+}
+
+func (aliases publicationTitleAliases) identity(detail ResultDetail) (doi, title string) {
+	doi, title = publicationDOI(detail), key(detail.Publication.Text("title"))
+	if doi != "" {
+		return doi, title
+	}
+	alias, found := aliases[publicationTitle{mode: detail.ExtractionMode, title: title}]
+	if found && alias == "" {
+		return "", ""
+	}
+	return alias, title
+}
+
+func distinctPublicationPair(bucket []ResultDetail, aliases publicationTitleAliases) (int, int, bool) {
 	firstDOI := ""
 	withDOI, withoutDOI := -1, -1
 	for i, detail := range bucket {
-		doi := publicationDOI(detail)
+		doi, title := aliases.identity(detail)
 		switch {
 		case doi == "":
-			if withoutDOI == -1 && key(detail.Publication.Text("title")) != "" {
+			if withoutDOI == -1 && title != "" {
 				withoutDOI = i
 			}
 		case withDOI == -1:
@@ -173,7 +218,7 @@ func distinctPublicationPair(bucket []ResultDetail) (int, int, bool) {
 	if withoutDOI != -1 {
 		title := key(bucket[withoutDOI].Publication.Text("title"))
 		for i, detail := range bucket {
-			if other := key(detail.Publication.Text("title")); other != "" && other != title {
+			if _, other := aliases.identity(detail); other != "" && other != title {
 				return min(i, withoutDOI), max(i, withoutDOI), true
 			}
 		}

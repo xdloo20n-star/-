@@ -193,6 +193,8 @@ def add_document(rows, corpus_id, detail):
     if not isinstance(publication, dict) or type(publication.get("in_scope")) is not bool:
         raise ValueError("missing publication or invalid in_scope decision")
     included = publication["in_scope"]
+    if not included and data.get("results"):
+        raise ValueError("excluded publication has result rows")
     authors = publication.get("authors")
     rows["publications"].append(dict(publication, publication_id=corpus_id, DOI=publication.get("doi"),
                                      in_scope="true" if included else "false",

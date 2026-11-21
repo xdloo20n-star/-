@@ -121,7 +121,11 @@ paths:
   /api/v1/groups:
     get:
       operationId: listComparableGroups
-      description: Groups primary extracted numeric results with matching RAG criteria and extraction mode. The first two results represent distinct publications identified by DOI or title.
+      description: >-
+        Groups primary extracted numeric results with matching RAG criteria and extraction mode.
+        The first two results represent distinct publications identified by DOI or title.
+        A missing DOI is resolved by title when exactly one DOI matches among candidates of the same extraction mode.
+        A result with a missing DOI and an ambiguous title can appear in a group whose first two results establish distinct publications.
       responses:
         '200':
           description: Confirmed comparable groups, ordered by stable group ID
@@ -343,15 +347,13 @@ components:
         configuration_name: {type: string}
         metric_name: {type: string}
         raw_value: {type: string}
-        normalized:
-          anyOf:
-            - {$ref: '#/components/schemas/MeasuredValue'}
-            - {type: 'null'}
+        normalized: {$ref: '#/components/schemas/MeasuredValue'}
     ComparableGroup:
       type: object
-      required: [group_id, criteria, results]
+      required: [group_id, extraction_mode, criteria, results]
       properties:
         group_id: {$ref: '#/components/schemas/ID'}
+        extraction_mode: {$ref: '#/components/schemas/Mode'}
         criteria: {type: array, items: {$ref: '#/components/schemas/Criterion'}}
         results: {type: array, minItems: 2, items: {$ref: '#/components/schemas/GroupResult'}}
     Comparison:

@@ -114,33 +114,14 @@ type NumericComparison struct {
 }
 
 func Compare(left, right ResultDetail) Comparison {
-	leftUnit, _ := normalizationUnit(left.Result)
-	rightUnit, _ := normalizationUnit(right.Result)
+	criteria, status := compareConditions(left, right)
 	comparison := Comparison{
 		LeftResultID:        left.Result.Text("result_id"),
 		RightResultID:       right.Result.Text("result_id"),
 		LeftExtractionMode:  left.ExtractionMode,
 		RightExtractionMode: right.ExtractionMode,
-		Status:              Comparable,
-		Criteria: []Criterion{
-			compareText("task", "Тип задачи", left.Task.Text("task_type"), right.Task.Text("task_type")),
-			compareText("dataset", "Датасет", left.Dataset.Text("dataset_name"), right.Dataset.Text("dataset_name")),
-			compareText("dataset_version", "Версия датасета", left.Dataset.Text("dataset_version"), right.Dataset.Text("dataset_version")),
-			compareText("data_split", "Сплит", left.Dataset.Text("data_split"), right.Dataset.Text("data_split")),
-			compareDefinition(left.Result, right.Result),
-			compareCutoff(left.Result, right.Result),
-			compareText("scale", "Шкала после нормализации", leftUnit, rightUnit),
-			compareText("aggregation", "Агрегация", left.Result.Text("aggregation"), right.Result.Text("aggregation")),
-			compareText("evaluation_protocol", "Протокол оценки", left.Experiment.Text("evaluation_protocol"), right.Experiment.Text("evaluation_protocol")),
-		},
-	}
-	for _, criterion := range comparison.Criteria {
-		switch {
-		case criterion.Status == "mismatch":
-			comparison.Status = NotComparable
-		case criterion.Status == "missing" && comparison.Status == Comparable:
-			comparison.Status = InsufficientInformation
-		}
+		Status:              status,
+		Criteria:            criteria,
 	}
 	if comparison.Status != Comparable || left.Normalized == nil || right.Normalized == nil {
 		return comparison
@@ -155,6 +136,32 @@ func Compare(left, right ResultDetail) Comparison {
 		Unit: left.Normalized.Unit, Preferred: preferredSide(delta, left.Result, right.Result),
 	}
 	return comparison
+}
+
+func compareConditions(left, right ResultDetail) ([]Criterion, string) {
+	leftUnit, _ := normalizationUnit(left.Result)
+	rightUnit, _ := normalizationUnit(right.Result)
+	criteria := []Criterion{
+		compareText("task", "Тип задачи", left.Task.Text("task_type"), right.Task.Text("task_type")),
+		compareText("dataset", "Датасет", left.Dataset.Text("dataset_name"), right.Dataset.Text("dataset_name")),
+		compareText("dataset_version", "Версия датасета", left.Dataset.Text("dataset_version"), right.Dataset.Text("dataset_version")),
+		compareText("data_split", "Сплит", left.Dataset.Text("data_split"), right.Dataset.Text("data_split")),
+		compareDefinition(left.Result, right.Result),
+		compareCutoff(left.Result, right.Result),
+		compareText("scale", "Шкала после нормализации", leftUnit, rightUnit),
+		compareText("aggregation", "Агрегация", left.Result.Text("aggregation"), right.Result.Text("aggregation")),
+		compareText("evaluation_protocol", "Протокол оценки", left.Experiment.Text("evaluation_protocol"), right.Experiment.Text("evaluation_protocol")),
+	}
+	status := Comparable
+	for _, criterion := range criteria {
+		switch criterion.Status {
+		case "mismatch":
+			return criteria, NotComparable
+		case "missing":
+			status = InsufficientInformation
+		}
+	}
+	return criteria, status
 }
 
 func compareText(name, label, left, right string) Criterion {

@@ -611,8 +611,10 @@ function showGroups(screen) {
         const first = group.results[0];
         const second = group.results[1];
         return element("section", "panel group-card",
-          element("div", "section-heading", element("div", "section-title",
-            element("h2", "", first.metric_name), element("span", "section-count", `${group.results.length} результатов`))),
+          element("div", "section-heading",
+            element("div", "section-title",
+              element("h2", "", first.metric_name), element("span", "section-count", `${group.results.length} результатов`)),
+            mockBadge(group.extraction_mode)),
           element("p", "muted", `${first.dataset_name || UNKNOWN} · ${group.group_id}`), members,
           second ? link("Сравнить две статьи", route("compare", {
             left: first.result_id, right: second.result_id, from: "#groups",

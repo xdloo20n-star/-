@@ -199,6 +199,21 @@ class BatchTest(unittest.TestCase):
                 self.assertIn(f"result with extraction_mode={mode!r}", err)
                 self.assertFalse(self.output.exists())
 
+    def test_convert_rejects_result_rows_for_excluded_publications(self):
+        for mode in (None, "mock", "python"):
+            with self.subTest(mode=mode):
+                self.output = self.root / f"excluded-{mode}"
+                excluded = detail("D002")
+                summary = {"result": {"result_id": "r1"}}
+                if mode is not None:
+                    summary["extraction_mode"] = mode
+                excluded["data"]["results"] = [summary]
+                code, _, err = self.cli("convert", self.export(excluded))
+                self.assertEqual(1, code)
+                self.assertIn("D002 (doc_D002)", err)
+                self.assertIn("excluded publication has result rows", err)
+                self.assertFalse(self.output.exists())
+
     def test_single_document_detail_and_existing_output(self):
         path = self.root / "detail.json"
         path.write_text(json.dumps(detail()), encoding="utf-8")

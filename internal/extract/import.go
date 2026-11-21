@@ -114,8 +114,8 @@ func (i *Importer) Prepare(raw []byte, doc model.Document) (*model.DocumentData,
 		}
 	}
 
-	summaries, baselineMessages := makeResultSummaries(doc, results, index)
-	issues := makeIssues(doc, pub, sourceDocument, summaries, evidenceByResult, baselineMessages)
+	summaries := makeResultSummaries(doc, results, index)
+	issues := makeIssues(doc, pub, sourceDocument, summaries, evidenceByResult)
 	for _, result := range results {
 		for _, ref := range resultReferences {
 			if id := result.Text(ref.field); id != "" {
@@ -131,11 +131,13 @@ func (i *Importer) Prepare(raw []byte, doc model.Document) (*model.DocumentData,
 			record[set.idField] = scopedID(doc.ID, set.kind, record.Text(set.idField))
 		}
 	}
-	return &model.DocumentData{
+	data := &model.DocumentData{
 		SourceDocument: sourceDocument, Publication: pub, Configurations: configs,
 		Datasets: datasets, Tasks: tasks, Experiments: experiments, Results: summaries,
 		Evidence: evidence, Issues: issues,
-	}, nil
+	}
+	data.RefreshBaselines()
+	return data, nil
 }
 
 func records(object map[string]any, key string) []model.Record {
@@ -242,10 +244,8 @@ func validateEvidence(doc model.Record, evidence []model.Record, index entityInd
 	return byResult, nil
 }
 
-func makeResultSummaries(doc model.Document, results []model.Record, index entityIndex) ([]model.ResultSummary, map[string]string) {
+func makeResultSummaries(doc model.Document, results []model.Record, index entityIndex) []model.ResultSummary {
 	summaries := make([]model.ResultSummary, 0, len(results))
-	details := make(map[string]model.ResultDetail, len(results))
-	baselineMessages := make(map[string]string)
 	for _, result := range results {
 		config := index["configuration"][result.Text("config_id")]
 		task := index["task"][result.Text("task_id")]
@@ -256,48 +256,12 @@ func makeResultSummaries(doc model.Document, results []model.Record, index entit
 			TaskType: task.TextPtr("task_type"), ConfigurationName: config.TextPtr("rag_variant"),
 		}
 		summaries = append(summaries, summary)
-		details[result.Text("result_id")] = model.ResultDetail{
-			ResultSummary: summary, Dataset: dataset, Task: task,
-			Experiment: index["experiment"][result.Text("experiment_id")],
-		}
 	}
-	for i := range summaries {
-		result := summaries[i].Result
-		if baselineID := result.Text("baseline_result_id"); baselineID != "" {
-			left, baseline := details[result.Text("result_id")], details[baselineID]
-			comparison := model.Compare(left, baseline)
-			if comparison.Numeric != nil {
-				summaries[i].Baseline = baseline.Normalized
-			} else {
-				baselineMessages[result.Text("result_id")] = baselineUnavailableMessage(left, baseline, comparison)
-			}
-		}
-	}
-	return summaries, baselineMessages
+	return summaries
 }
 
-func baselineUnavailableMessage(result, baseline model.ResultDetail, comparison model.Comparison) string {
-	var reasons []string
-	for _, criterion := range comparison.Criteria {
-		if criterion.Status == "mismatch" || criterion.Status == "missing" {
-			reasons = append(reasons, criterion.Message)
-		}
-	}
-	if len(reasons) != 0 {
-		return "Baseline не включён в baseline_value: " + strings.Join(reasons, " ")
-	}
-	if result.Result.Text("extraction_status") != "extracted" || baseline.Result.Text("extraction_status") != "extracted" {
-		return "Baseline не включён в baseline_value: один из результатов не имеет статуса extracted."
-	}
-	return "Baseline не включён в baseline_value: для одного или обоих результатов не подтверждена числовая нормализация."
-}
-
-func makeIssues(doc model.Document, publication, sourceDocument model.Record, rows []model.ResultSummary, evidence map[string][]model.Record, baselineMessages map[string]string) []model.Issue {
+func makeIssues(doc model.Document, publication, sourceDocument model.Record, rows []model.ResultSummary, evidence map[string][]model.Record) []model.Issue {
 	issues := []model.Issue{}
-	resultIndexes := make(map[string]int, len(rows))
-	for i, row := range rows {
-		resultIndexes[row.Result.Text("result_id")] = i
-	}
 	for i := range rows {
 		row := &rows[i]
 		result := row.Result
@@ -310,24 +274,14 @@ func makeIssues(doc model.Document, publication, sourceDocument model.Record, ro
 			verification := source.Text("verification")
 			verifiedSource = verifiedSource || verification == "text_match" || verification == "ocr_match"
 		}
-		addRelated := func(rule, message string, relatedResultIDs []string) {
-			resultIDs := []string{scopedID(doc.ID, "result", localID)}
-			for _, relatedID := range relatedResultIDs {
-				if relatedID != "" && relatedID != localID {
-					resultIDs = append(resultIDs, scopedID(doc.ID, "result", relatedID))
-					if relatedIndex, ok := resultIndexes[relatedID]; ok {
-						rows[relatedIndex].IssueCount++
-					}
-				}
-			}
+		add := func(rule, message string) {
 			issues = append(issues, model.Issue{
 				ID: scopedID(doc.ID, "issue", localID+":"+rule), CheckName: rule,
 				Severity: "warning", Description: message,
-				ResultIDs: resultIDs, EvidenceIDs: sourceIDs,
+				ResultIDs: []string{scopedID(doc.ID, "result", localID)}, EvidenceIDs: sourceIDs,
 			})
 			row.IssueCount++
 		}
-		add := func(rule, message string) { addRelated(rule, message, nil) }
 		if row.Normalized != nil && row.Normalized.Unit == "fraction" && model.BoundedFraction(result) &&
 			(row.Normalized.Value < 0 || row.Normalized.Value > 1) {
 			add("metric_scale", "Значение выходит за диапазон указанной метрики и шкалы.")
@@ -343,9 +297,6 @@ func makeIssues(doc model.Document, publication, sourceDocument model.Record, ro
 		}
 		if result["reported_value"] != nil && row.Normalized == nil {
 			add("normalization", "Нормализация недоступна для указанного значения, единицы или шкалы.")
-		}
-		if message := baselineMessages[localID]; message != "" {
-			addRelated("baseline_unavailable", message, []string{result.Text("baseline_result_id")})
 		}
 	}
 	if pages := sourceDocument["unreadable_pages"].([]any); len(pages) != 0 {

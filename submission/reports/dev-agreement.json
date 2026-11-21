@@ -1,0 +1,2121 @@
+{
+  "report_version": 1,
+  "interpretation": "Precision, recall and F1 measure agreement on these local matching keys only. They do not establish scientific validity.",
+  "scoring": {
+    "eligible": "Canonical extracted rows from included publications within the gold PDF set.",
+    "table_only": "Eligible rows with a nonempty table locator.",
+    "source": "Exact normalized raw value, raw unit, metric, cutoff, variant, aggregation, page and table/figure keys.",
+    "context": "Source key plus publication-local configuration and dataset field keys, with the same denominators.",
+    "macro": "Arithmetic mean across papers with eligible gold rows in each scope, using zero precision for papers with no eligible candidate rows."
+  },
+  "corpus": {
+    "coverage": {
+      "gold_pdfs": 21,
+      "candidate_pdfs": 21,
+      "present_gold_pdfs": 21,
+      "pdf_coverage": 1.0,
+      "missing_pdfs": [],
+      "outside_gold_pdfs": [],
+      "scope_disagreement_pdfs": []
+    },
+    "context_tables_available": {
+      "gold": true,
+      "candidate": true
+    },
+    "scopes": {
+      "all_results": {
+        "gold": {
+          "rows": 37616,
+          "extracted": 37569,
+          "absent": 39,
+          "present_not_extractable": 8,
+          "marked_duplicate": 18177,
+          "excluded_rows": 0,
+          "eligible": 19392,
+          "source_keyed": 19012,
+          "context_keyed": 19000
+        },
+        "candidate": {
+          "rows": 835,
+          "extracted": 835,
+          "absent": 0,
+          "present_not_extractable": 0,
+          "marked_duplicate": 0,
+          "excluded_rows": 0,
+          "eligible": 835,
+          "source_keyed": 835,
+          "context_keyed": 780
+        },
+        "candidate_outside_gold": {
+          "rows": 0,
+          "extracted": 0,
+          "absent": 0,
+          "present_not_extractable": 0,
+          "marked_duplicate": 0,
+          "excluded_rows": 0,
+          "eligible": 0,
+          "source_keyed": 0,
+          "context_keyed": 0
+        },
+        "gold_papers_with_eligible_records": 21,
+        "candidate_papers_with_eligible_records": 9,
+        "source_agreement": {
+          "micro": {
+            "matches": 451,
+            "gold_unmatched": 18941,
+            "candidate_unmatched": 384,
+            "precision": 0.5401197604790419,
+            "recall": 0.02325701320132013,
+            "f1": 0.04459385969249024
+          },
+          "macro": {
+            "papers": 21,
+            "precision": 0.18982358637531052,
+            "recall": 0.06582728537105668,
+            "f1": 0.08875386406276689
+          }
+        },
+        "context_agreement": {
+          "micro": {
+            "matches": 156,
+            "gold_unmatched": 19236,
+            "candidate_unmatched": 679,
+            "precision": 0.18682634730538922,
+            "recall": 0.008044554455445545,
+            "f1": 0.015424927077668463
+          },
+          "macro": {
+            "papers": 21,
+            "precision": 0.02947845804988662,
+            "recall": 0.01939574785527788,
+            "f1": 0.023397075365579303
+          }
+        }
+      },
+      "table_only": {
+        "gold": {
+          "rows": 5940,
+          "extracted": 5908,
+          "absent": 32,
+          "present_not_extractable": 0,
+          "marked_duplicate": 452,
+          "excluded_rows": 0,
+          "eligible": 5456,
+          "source_keyed": 5456,
+          "context_keyed": 5456
+        },
+        "candidate": {
+          "rows": 835,
+          "extracted": 835,
+          "absent": 0,
+          "present_not_extractable": 0,
+          "marked_duplicate": 0,
+          "excluded_rows": 0,
+          "eligible": 835,
+          "source_keyed": 835,
+          "context_keyed": 780
+        },
+        "candidate_outside_gold": {
+          "rows": 0,
+          "extracted": 0,
+          "absent": 0,
+          "present_not_extractable": 0,
+          "marked_duplicate": 0,
+          "excluded_rows": 0,
+          "eligible": 0,
+          "source_keyed": 0,
+          "context_keyed": 0
+        },
+        "gold_papers_with_eligible_records": 21,
+        "candidate_papers_with_eligible_records": 9,
+        "source_agreement": {
+          "micro": {
+            "matches": 451,
+            "gold_unmatched": 5005,
+            "candidate_unmatched": 384,
+            "precision": 0.5401197604790419,
+            "recall": 0.08266129032258064,
+            "f1": 0.143379430933079
+          },
+          "macro": {
+            "papers": 21,
+            "precision": 0.18982358637531052,
+            "recall": 0.11662832119740084,
+            "f1": 0.1371628522441871
+          }
+        },
+        "context_agreement": {
+          "micro": {
+            "matches": 156,
+            "gold_unmatched": 5300,
+            "candidate_unmatched": 679,
+            "precision": 0.18682634730538922,
+            "recall": 0.028592375366568914,
+            "f1": 0.04959465903671912
+          },
+          "macro": {
+            "papers": 21,
+            "precision": 0.02947845804988662,
+            "recall": 0.023433979269941414,
+            "f1": 0.026110971629425057
+          }
+        }
+      }
+    }
+  },
+  "documents": {
+    "D001": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 416,
+            "extracted": 415,
+            "absent": 1,
+            "present_not_extractable": 0,
+            "marked_duplicate": 32,
+            "excluded_rows": 0,
+            "eligible": 383,
+            "source_keyed": 368,
+            "context_keyed": 368
+          },
+          "candidate": {
+            "rows": 252,
+            "extracted": 252,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 252,
+            "source_keyed": 252,
+            "context_keyed": 252
+          },
+          "source_agreement": {
+            "matches": 252,
+            "gold_unmatched": 131,
+            "candidate_unmatched": 0,
+            "precision": 1.0,
+            "recall": 0.6579634464751958,
+            "f1": 0.7937007874015748
+          },
+          "context_agreement": {
+            "matches": 156,
+            "gold_unmatched": 227,
+            "candidate_unmatched": 96,
+            "precision": 0.6190476190476191,
+            "recall": 0.4073107049608355,
+            "f1": 0.49133858267716535
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 319,
+            "extracted": 318,
+            "absent": 1,
+            "present_not_extractable": 0,
+            "marked_duplicate": 1,
+            "excluded_rows": 0,
+            "eligible": 317,
+            "source_keyed": 317,
+            "context_keyed": 317
+          },
+          "candidate": {
+            "rows": 252,
+            "extracted": 252,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 252,
+            "source_keyed": 252,
+            "context_keyed": 252
+          },
+          "source_agreement": {
+            "matches": 252,
+            "gold_unmatched": 65,
+            "candidate_unmatched": 0,
+            "precision": 1.0,
+            "recall": 0.7949526813880127,
+            "f1": 0.8857644991212654
+          },
+          "context_agreement": {
+            "matches": 156,
+            "gold_unmatched": 161,
+            "candidate_unmatched": 96,
+            "precision": 0.6190476190476191,
+            "recall": 0.4921135646687697,
+            "f1": 0.5483304042179262
+          }
+        }
+      }
+    },
+    "D002": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 386,
+            "extracted": 376,
+            "absent": 10,
+            "present_not_extractable": 0,
+            "marked_duplicate": 60,
+            "excluded_rows": 0,
+            "eligible": 316,
+            "source_keyed": 289,
+            "context_keyed": 289
+          },
+          "candidate": {
+            "rows": 12,
+            "extracted": 12,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 12,
+            "source_keyed": 12,
+            "context_keyed": 12
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 316,
+            "candidate_unmatched": 12,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 316,
+            "candidate_unmatched": 12,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 276,
+            "extracted": 268,
+            "absent": 8,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 268,
+            "source_keyed": 268,
+            "context_keyed": 268
+          },
+          "candidate": {
+            "rows": 12,
+            "extracted": 12,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 12,
+            "source_keyed": 12,
+            "context_keyed": 12
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 268,
+            "candidate_unmatched": 12,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 268,
+            "candidate_unmatched": 12,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D003": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 931,
+            "extracted": 931,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 258,
+            "excluded_rows": 0,
+            "eligible": 673,
+            "source_keyed": 661,
+            "context_keyed": 659
+          },
+          "candidate": {
+            "rows": 18,
+            "extracted": 18,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 18,
+            "source_keyed": 18,
+            "context_keyed": 18
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 673,
+            "candidate_unmatched": 18,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 673,
+            "candidate_unmatched": 18,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 25,
+            "extracted": 25,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 25,
+            "source_keyed": 25,
+            "context_keyed": 25
+          },
+          "candidate": {
+            "rows": 18,
+            "extracted": 18,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 18,
+            "source_keyed": 18,
+            "context_keyed": 18
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 25,
+            "candidate_unmatched": 18,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 25,
+            "candidate_unmatched": 18,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D004": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 297,
+            "extracted": 297,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 90,
+            "excluded_rows": 0,
+            "eligible": 207,
+            "source_keyed": 179,
+            "context_keyed": 179
+          },
+          "candidate": {
+            "rows": 28,
+            "extracted": 28,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 28,
+            "source_keyed": 28,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 14,
+            "gold_unmatched": 193,
+            "candidate_unmatched": 14,
+            "precision": 0.5,
+            "recall": 0.06763285024154589,
+            "f1": 0.11914893617021277
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 207,
+            "candidate_unmatched": 28,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 230,
+            "extracted": 230,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 51,
+            "excluded_rows": 0,
+            "eligible": 179,
+            "source_keyed": 179,
+            "context_keyed": 179
+          },
+          "candidate": {
+            "rows": 28,
+            "extracted": 28,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 28,
+            "source_keyed": 28,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 14,
+            "gold_unmatched": 165,
+            "candidate_unmatched": 14,
+            "precision": 0.5,
+            "recall": 0.0782122905027933,
+            "f1": 0.13526570048309178
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 179,
+            "candidate_unmatched": 28,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D005": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 382,
+            "extracted": 382,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 36,
+            "excluded_rows": 0,
+            "eligible": 346,
+            "source_keyed": 338,
+            "context_keyed": 338
+          },
+          "candidate": {
+            "rows": 78,
+            "extracted": 78,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 78,
+            "source_keyed": 78,
+            "context_keyed": 72
+          },
+          "source_agreement": {
+            "matches": 72,
+            "gold_unmatched": 274,
+            "candidate_unmatched": 6,
+            "precision": 0.9230769230769231,
+            "recall": 0.20809248554913296,
+            "f1": 0.33962264150943394
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 346,
+            "candidate_unmatched": 78,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 269,
+            "extracted": 269,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 32,
+            "excluded_rows": 0,
+            "eligible": 237,
+            "source_keyed": 237,
+            "context_keyed": 237
+          },
+          "candidate": {
+            "rows": 78,
+            "extracted": 78,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 78,
+            "source_keyed": 78,
+            "context_keyed": 72
+          },
+          "source_agreement": {
+            "matches": 72,
+            "gold_unmatched": 165,
+            "candidate_unmatched": 6,
+            "precision": 0.9230769230769231,
+            "recall": 0.3037974683544304,
+            "f1": 0.45714285714285713
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 237,
+            "candidate_unmatched": 78,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D006": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 598,
+            "extracted": 592,
+            "absent": 0,
+            "present_not_extractable": 6,
+            "marked_duplicate": 27,
+            "excluded_rows": 0,
+            "eligible": 565,
+            "source_keyed": 555,
+            "context_keyed": 555
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 565,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 565,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 350,
+            "extracted": 350,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 350,
+            "source_keyed": 350,
+            "context_keyed": 350
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 350,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 350,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D007": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 832,
+            "extracted": 832,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 74,
+            "excluded_rows": 0,
+            "eligible": 758,
+            "source_keyed": 758,
+            "context_keyed": 758
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 758,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 758,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 777,
+            "extracted": 777,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 34,
+            "excluded_rows": 0,
+            "eligible": 743,
+            "source_keyed": 743,
+            "context_keyed": 743
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 743,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 743,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D008": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 386,
+            "extracted": 385,
+            "absent": 1,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 385,
+            "source_keyed": 374,
+            "context_keyed": 374
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 385,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 385,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 100,
+            "extracted": 100,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 100,
+            "source_keyed": 100,
+            "context_keyed": 100
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 100,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 100,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D009": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 969,
+            "extracted": 969,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 248,
+            "excluded_rows": 0,
+            "eligible": 721,
+            "source_keyed": 688,
+            "context_keyed": 688
+          },
+          "candidate": {
+            "rows": 252,
+            "extracted": 252,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 252,
+            "source_keyed": 252,
+            "context_keyed": 252
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 721,
+            "candidate_unmatched": 252,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 721,
+            "candidate_unmatched": 252,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 621,
+            "extracted": 621,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 122,
+            "excluded_rows": 0,
+            "eligible": 499,
+            "source_keyed": 499,
+            "context_keyed": 499
+          },
+          "candidate": {
+            "rows": 252,
+            "extracted": 252,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 252,
+            "source_keyed": 252,
+            "context_keyed": 252
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 499,
+            "candidate_unmatched": 252,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 499,
+            "candidate_unmatched": 252,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D010": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 193,
+            "extracted": 191,
+            "absent": 2,
+            "present_not_extractable": 0,
+            "marked_duplicate": 39,
+            "excluded_rows": 0,
+            "eligible": 152,
+            "source_keyed": 105,
+            "context_keyed": 95
+          },
+          "candidate": {
+            "rows": 15,
+            "extracted": 15,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 15,
+            "source_keyed": 15,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 15,
+            "gold_unmatched": 137,
+            "candidate_unmatched": 0,
+            "precision": 1.0,
+            "recall": 0.09868421052631579,
+            "f1": 0.17964071856287425
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 152,
+            "candidate_unmatched": 15,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 21,
+            "extracted": 21,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 2,
+            "excluded_rows": 0,
+            "eligible": 19,
+            "source_keyed": 19,
+            "context_keyed": 19
+          },
+          "candidate": {
+            "rows": 15,
+            "extracted": 15,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 15,
+            "source_keyed": 15,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 15,
+            "gold_unmatched": 4,
+            "candidate_unmatched": 0,
+            "precision": 1.0,
+            "recall": 0.7894736842105263,
+            "f1": 0.8823529411764706
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 19,
+            "candidate_unmatched": 15,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D011": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 365,
+            "extracted": 363,
+            "absent": 0,
+            "present_not_extractable": 2,
+            "marked_duplicate": 18,
+            "excluded_rows": 0,
+            "eligible": 345,
+            "source_keyed": 332,
+            "context_keyed": 332
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 345,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 345,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 196,
+            "extracted": 196,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 3,
+            "excluded_rows": 0,
+            "eligible": 193,
+            "source_keyed": 193,
+            "context_keyed": 193
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 193,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 193,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D012": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 892,
+            "extracted": 879,
+            "absent": 13,
+            "present_not_extractable": 0,
+            "marked_duplicate": 114,
+            "excluded_rows": 0,
+            "eligible": 765,
+            "source_keyed": 729,
+            "context_keyed": 729
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 765,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 765,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 811,
+            "extracted": 799,
+            "absent": 12,
+            "present_not_extractable": 0,
+            "marked_duplicate": 85,
+            "excluded_rows": 0,
+            "eligible": 714,
+            "source_keyed": 714,
+            "context_keyed": 714
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 714,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 714,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D013": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 578,
+            "extracted": 578,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 92,
+            "excluded_rows": 0,
+            "eligible": 486,
+            "source_keyed": 470,
+            "context_keyed": 470
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 486,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 486,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 391,
+            "extracted": 391,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 1,
+            "excluded_rows": 0,
+            "eligible": 390,
+            "source_keyed": 390,
+            "context_keyed": 390
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 390,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 390,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D014": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 28649,
+            "extracted": 28649,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 16889,
+            "excluded_rows": 0,
+            "eligible": 11760,
+            "source_keyed": 11751,
+            "context_keyed": 11751
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 11760,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 11760,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 108,
+            "extracted": 108,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 108,
+            "source_keyed": 108,
+            "context_keyed": 108
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 108,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 108,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D015": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 268,
+            "extracted": 268,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 46,
+            "excluded_rows": 0,
+            "eligible": 222,
+            "source_keyed": 185,
+            "context_keyed": 185
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 222,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 222,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 213,
+            "extracted": 213,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 36,
+            "excluded_rows": 0,
+            "eligible": 177,
+            "source_keyed": 177,
+            "context_keyed": 177
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 177,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 177,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D016": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 78,
+            "extracted": 77,
+            "absent": 1,
+            "present_not_extractable": 0,
+            "marked_duplicate": 5,
+            "excluded_rows": 0,
+            "eligible": 72,
+            "source_keyed": 61,
+            "context_keyed": 61
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 72,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 72,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 50,
+            "extracted": 50,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 50,
+            "source_keyed": 50,
+            "context_keyed": 50
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 50,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 50,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D017": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 290,
+            "extracted": 290,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 58,
+            "excluded_rows": 0,
+            "eligible": 232,
+            "source_keyed": 216,
+            "context_keyed": 216
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 232,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 232,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 252,
+            "extracted": 252,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 36,
+            "excluded_rows": 0,
+            "eligible": 216,
+            "source_keyed": 216,
+            "context_keyed": 216
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 216,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 216,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D018": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 332,
+            "extracted": 323,
+            "absent": 9,
+            "present_not_extractable": 0,
+            "marked_duplicate": 6,
+            "excluded_rows": 0,
+            "eligible": 317,
+            "source_keyed": 313,
+            "context_keyed": 313
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 317,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 317,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 326,
+            "extracted": 317,
+            "absent": 9,
+            "present_not_extractable": 0,
+            "marked_duplicate": 4,
+            "excluded_rows": 0,
+            "eligible": 313,
+            "source_keyed": 313,
+            "context_keyed": 313
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 313,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 313,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D019": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 302,
+            "extracted": 302,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 22,
+            "excluded_rows": 0,
+            "eligible": 280,
+            "source_keyed": 259,
+            "context_keyed": 259
+          },
+          "candidate": {
+            "rows": 174,
+            "extracted": 174,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 174,
+            "source_keyed": 174,
+            "context_keyed": 174
+          },
+          "source_agreement": {
+            "matches": 98,
+            "gold_unmatched": 182,
+            "candidate_unmatched": 76,
+            "precision": 0.5632183908045977,
+            "recall": 0.35,
+            "f1": 0.43171806167400884
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 280,
+            "candidate_unmatched": 174,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 220,
+            "extracted": 220,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 17,
+            "excluded_rows": 0,
+            "eligible": 203,
+            "source_keyed": 203,
+            "context_keyed": 203
+          },
+          "candidate": {
+            "rows": 174,
+            "extracted": 174,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 174,
+            "source_keyed": 174,
+            "context_keyed": 174
+          },
+          "source_agreement": {
+            "matches": 98,
+            "gold_unmatched": 105,
+            "candidate_unmatched": 76,
+            "precision": 0.5632183908045977,
+            "recall": 0.4827586206896552,
+            "f1": 0.519893899204244
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 203,
+            "candidate_unmatched": 174,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D020": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 408,
+            "extracted": 406,
+            "absent": 2,
+            "present_not_extractable": 0,
+            "marked_duplicate": 63,
+            "excluded_rows": 0,
+            "eligible": 343,
+            "source_keyed": 331,
+            "context_keyed": 331
+          },
+          "candidate": {
+            "rows": 6,
+            "extracted": 6,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 6,
+            "source_keyed": 6,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 343,
+            "candidate_unmatched": 6,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 343,
+            "candidate_unmatched": 6,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 361,
+            "extracted": 359,
+            "absent": 2,
+            "present_not_extractable": 0,
+            "marked_duplicate": 28,
+            "excluded_rows": 0,
+            "eligible": 331,
+            "source_keyed": 331,
+            "context_keyed": 331
+          },
+          "candidate": {
+            "rows": 6,
+            "extracted": 6,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 6,
+            "source_keyed": 6,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 331,
+            "candidate_unmatched": 6,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 331,
+            "candidate_unmatched": 6,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    },
+    "D021": {
+      "gold": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "candidate": {
+        "decision": "included",
+        "exclusion_reason": ""
+      },
+      "in_gold": true,
+      "scopes": {
+        "all_results": {
+          "gold": {
+            "rows": 64,
+            "extracted": 64,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 64,
+            "source_keyed": 50,
+            "context_keyed": 50
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 64,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 64,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        },
+        "table_only": {
+          "gold": {
+            "rows": 24,
+            "extracted": 24,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 24,
+            "source_keyed": 24,
+            "context_keyed": 24
+          },
+          "candidate": {
+            "rows": 0,
+            "extracted": 0,
+            "absent": 0,
+            "present_not_extractable": 0,
+            "marked_duplicate": 0,
+            "excluded_rows": 0,
+            "eligible": 0,
+            "source_keyed": 0,
+            "context_keyed": 0
+          },
+          "source_agreement": {
+            "matches": 0,
+            "gold_unmatched": 24,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          },
+          "context_agreement": {
+            "matches": 0,
+            "gold_unmatched": 24,
+            "candidate_unmatched": 0,
+            "precision": null,
+            "recall": 0.0,
+            "f1": 0.0
+          }
+        }
+      }
+    }
+  }
+}

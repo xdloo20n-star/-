@@ -1,0 +1,63 @@
+publication_id,experiment_id,evaluation_protocol,baseline_name,hardware,latency_ms,tokens_per_query,sample_size,note
+D001,experiment_f7e329bdd9eea2e107b6b360381988e8,,,,,,,Table 1: Main results of multi-hop QA datasets. Best results are in bold and second best are underlined.
+D001,experiment_34804cf28d0ef8b205e55f6cf709b409,,,,,,,Table 1: Main results of multi-hop QA datasets. Best results are in bold and second best are underlined.
+D001,experiment_8875f50ca029d541744bf4848e72f581,,,,,,,Table 1: Main results of multi-hop QA datasets. Best results are in bold and second best are underlined.
+D004,experiment_ac839c96de661e7368b8ff6e07200ad8,,,,,,,"Table 2: Diversity metrics at k=20 (hybrid retrieval,"
+D004,experiment_8e98ed05bbd3beaa06304522aafda0a5,,,,,,,"Table 2: Diversity metrics at k=20 (hybrid retrieval,"
+D004,experiment_900b781d44ac464e698b856b31b913c9,,,,,,,"Table 2: Diversity metrics at k=20 (hybrid retrieval,"
+D004,experiment_98c75c1363150e1f4f3ef038e4e33c41,,,,,,,"Table 2: Diversity metrics at k=20 (hybrid retrieval,"
+D004,experiment_c52b896d27f86f987a1f722014e7accf,,,,,,,"Table 2: Diversity metrics at k=20 (hybrid retrieval,"
+D004,experiment_a3f2a604023123636cf5bf15d1e7827b,,,,,,,"Table 2: Diversity metrics at k=20 (hybrid retrieval,"
+D004,experiment_63e9e0e8f2f4ae318d6c8b058e9be7af,,,,,,,"Table 2: Diversity metrics at k=20 (hybrid retrieval,"
+D004,experiment_b125dd3b78759bcd78b2490eb3910063,,,,,,,Table 12: Diversity metrics on entity-matched docu-
+D004,experiment_3d493455996360c9b08c911056dac5bb,,,,,,,Table 12: Diversity metrics on entity-matched docu-
+D004,experiment_9c722ea423d686951d937aa115f54564,,,,,,,Table 12: Diversity metrics on entity-matched docu-
+D004,experiment_a4057d42927847b35cd31ef9267e1b8d,,,,,,,Table 12: Diversity metrics on entity-matched docu-
+D004,experiment_700c36d5ccbc840583b3d2553390921f,,,,,,,Table 12: Diversity metrics on entity-matched docu-
+D004,experiment_59be13163a9e5a7668cdae8cff5acc34,,,,,,,Table 12: Diversity metrics on entity-matched docu-
+D004,experiment_11e4fcd91305a89c6b1dfa3bc46e59da,,,,,,,Table 12: Diversity metrics on entity-matched docu-
+D010,experiment_35b05b906f749c73b7a820b7d8696a56,,,,,,,Table 1. Classification metrics (averages) for our router and for different benchmarks.
+D019,experiment_8a976fa086be768391e3d79ac0b7b67a,,,,,,,Table 1: A comparison of results from different baselines on the NQ and Huatuo test set. Our framework retrieves
+D019,experiment_b76ddffd228c41e8287133e3d83e4d50,,,,,,,Table 1: A comparison of results from different baselines on the NQ and Huatuo test set. Our framework retrieves
+D019,experiment_8b1a0e7796690e92f430cb9bf99f7f53,,,,,,,Table 4: Evaluation on the retrieved contexts utilizing w/o reasoning 32.42 23.85 17.94 17.91
+D019,experiment_ee543f50b48a33cabd64dc8f09d302c5,,,,,,,Table 4: Evaluation on the retrieved contexts utilizing w/o reasoning 32.42 23.85 17.94 17.91
+D002,experiment_ec45a4e08fc1a8141f12766a85b20052,,,,,,,TABLE II: Comparative Assessment of RAG Models on 156
+D002,experiment_4ae6f4f30fcf707c3222eeef5e93c000,,,,,,,TABLE II: Comparative Assessment of RAG Models on 156
+D005,experiment_3ba43fa561352495ce0ee7c6cbecfe35,,,,,,,Table 2: Comparison of RAG QA factuality scores for different approaches. P RISM RAG improves average factuality
+D005,experiment_042d72a95b9005fa9c23095ee0415349,,,,,,,Table 2: Comparison of RAG QA factuality scores for different approaches. P RISM RAG improves average factuality
+D005,experiment_2ed258eca30c75a1c8b732af966f40a8,,,,,,,Table 2: Comparison of RAG QA factuality scores for different approaches. P RISM RAG improves average factuality
+D005,experiment_739e5682d7de1bfeeb1f2e694bcb55ab,,,,,,,Table 2: Comparison of RAG QA factuality scores for different approaches. P RISM RAG improves average factuality
+D005,experiment_e8abbee29b7683970dd6cf86e263b6b6,,,,,,,Table 2: Comparison of RAG QA factuality scores for different approaches. P RISM RAG improves average factuality
+D005,experiment_b16608c7a14f1efaed7b677bc348d9a9,,,,,,,Table 2: Comparison of RAG QA factuality scores for different approaches. P RISM RAG improves average factuality
+D005,experiment_82f62ba6f8731219badde90aca7647cc,,,,,,,Table 2: Comparison of RAG QA factuality scores for different approaches. P RISM RAG improves average factuality
+D005,experiment_daf861fa2c6c7da29d9fa8868808fbde,,,,,,,Table 2: Comparison of RAG QA factuality scores for different approaches. P RISM RAG improves average factuality
+D005,experiment_ead43a6e9028b9bb5dd5be1c389aa79a,,,,,,,Table 2: Comparison of RAG QA factuality scores for different approaches. P RISM RAG improves average factuality
+D005,experiment_7a7ca7c3952b84d63484571b2611749d,,,,,,,Table 2: Comparison of RAG QA factuality scores for different approaches. P RISM RAG improves average factuality
+D005,experiment_d94c777932fd3cb3e13bc20a754e9216,,,,,,,Table 2: Comparison of RAG QA factuality scores for different approaches. P RISM RAG improves average factuality
+D005,experiment_05201736a56a5146fd444e9530b89f19,,,,,,,Table 2: Comparison of RAG QA factuality scores for different approaches. P RISM RAG improves average factuality
+D005,experiment_99c6970bed27686b4fccc173a2092b9c,,,,,,,Table 2: Comparison of RAG QA factuality scores for different approaches. P RISM RAG improves average factuality
+D020,experiment_4d4f24b9ce0b14c9574d692cf11a43da,,,,,,,Table 5: Aggregate Efficiency Summary
+D020,experiment_cacd6b01cee6d72f33898338b47b28fc,,,,,,,Table 5: Aggregate Efficiency Summary
+D020,experiment_e631ff793d332225f3c1fa5c8f124548,,,,,,,Table 5: Aggregate Efficiency Summary
+D003,experiment_2177ae6aa86105af19fa43c60803afa6,,,,,,,"Table 2: Our training complements retrieval augmentation. “Ours” denotes the trained model without RAG,"
+D003,experiment_cfc1bc5d83fa14a27f65b4e964bee9e1,,,,,,,"Table 2: Our training complements retrieval augmentation. “Ours” denotes the trained model without RAG,"
+D003,experiment_af58bebb8d1a93915fa75417af828293,,,,,,,"Table 2: Our training complements retrieval augmentation. “Ours” denotes the trained model without RAG,"
+D003,experiment_cd89afaac895a3b96b7ff41550264112,,,,,,,"Table 2: Our training complements retrieval augmentation. “Ours” denotes the trained model without RAG,"
+D003,experiment_034050adaba437e97fa409286be17575,,,,,,,"Table 2: Our training complements retrieval augmentation. “Ours” denotes the trained model without RAG,"
+D003,experiment_21bbd55ed1c50e758d2dd752f85d4469,,,,,,,"Table 2: Our training complements retrieval augmentation. “Ours” denotes the trained model without RAG,"
+D009,experiment_5a88f586fd1b24670d6fbb5fc3484574,,,,,,,Table 1: Comparison of different RAG methods across 5 benchmarks using EM and F1 metrics. Bold denotes
+D009,experiment_cf43107bb14b3b5544b2acbbaedf93f1,,,,,,,Table 1: Comparison of different RAG methods across 5 benchmarks using EM and F1 metrics. Bold denotes
+D009,experiment_3073a8522657c32a9e9807c534879b31,,,,,,,Table 1: Comparison of different RAG methods across 5 benchmarks using EM and F1 metrics. Bold denotes
+D009,experiment_ba1d71932e28edb59e9ff9ffe1e842df,,,,,,,Table 1: Comparison of different RAG methods across 5 benchmarks using EM and F1 metrics. Bold denotes
+D009,experiment_5f7dc702ad7a2b58ba3e7b0283a25ac7,,,,,,,Table 3: Impact of different optimization strategies on PRO-S TEP’s effectiveness across five benchmarks. Bold
+D009,experiment_02b5da73e220164ac6ccc4f4560374ef,,,,,,,Table 3: Impact of different optimization strategies on PRO-S TEP’s effectiveness across five benchmarks. Bold
+D009,experiment_26ce41293e30e8dd4c1763cb6ce26571,,,,,,,Table 3: Impact of different optimization strategies on PRO-S TEP’s effectiveness across five benchmarks. Bold
+D009,experiment_f8fab3a239f8f79cab80be4e14d4d325,,,,,,,Table 3: Impact of different optimization strategies on PRO-S TEP’s effectiveness across five benchmarks. Bold
+D009,experiment_fd761fff322310a4e2243e7f324eff54,,,,,,,Table 3: Impact of different optimization strategies on PRO-S TEP’s effectiveness across five benchmarks. Bold
+D009,experiment_fe9e948d1deccd4150f3ca384caf8764,,,,,,,Table 3: Impact of different optimization strategies on PRO-S TEP’s effectiveness across five benchmarks. Bold
+D009,experiment_188474c42487b91779a36a0e3d615ce9,,,,,,,Table 3: Impact of different optimization strategies on PRO-S TEP’s effectiveness across five benchmarks. Bold
+D009,experiment_b8061f8ac963359abffafa676fe78a2f,,,,,,,Table 3: Impact of different optimization strategies on PRO-S TEP’s effectiveness across five benchmarks. Bold
+D009,experiment_fc97d7254f0c46206f300f091f37503d,,,,,,,Table 5: Final EM on recovered trajectories. n is given subsets are consistently smaller because it fails less
+D009,experiment_ffe8120af4afe21a0cc03f1bdc691342,,,,,,,Table 5: Final EM on recovered trajectories. n is given subsets are consistently smaller because it fails less
+D009,experiment_ea285789968b02d3874ee0376e80b7ea,,,,,,,Table 5: Final EM on recovered trajectories. n is given subsets are consistently smaller because it fails less
+D009,experiment_cfb3704d8a1d3b8aceb5d5cd8c7165e9,,,,,,,Table 5: Final EM on recovered trajectories. n is given subsets are consistently smaller because it fails less

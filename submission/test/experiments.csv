@@ -1,0 +1,48 @@
+publication_id,experiment_id,evaluation_protocol,baseline_name,hardware,latency_ms,tokens_per_query,sample_size,note
+P001,experiment_37c919e6d2ef5d3d6965333dab874b8f,,,,,,,"Table 1: Performance of semantic search for text embedding experimental results on ORD-QA: by setting 𝑘 from 1 to 5, our"
+P001,experiment_3ee398ee86d9ed364129b40a64cde7cb,,,,,,,"Table 2: Performance of reranker for weakly-related docu- erator on the task of answering EDA-tool-involved questions, for"
+P013,experiment_07d82da5c36b60eb7b28443cc2d8bc39,,,,,,,Table 8: Statistics of datasets. “# Rel/Docs” denot
+P025,experiment_9d063ad94c77bd1b952a56b1198592d8,,,,,,,Table 1: Untargeted attack on RD (250 prompts). per query k and then the impact of command com-
+P025,experiment_4d94bdba40f7beafca74db93128c91fd,,,,,,,Table 7: Impact of temperature(untargeted)
+P025,experiment_d740eeb54f2ac8f424f2f59e456bc73a,,,,,,,Table 11: Impact of question(untargeted)
+P025,experiment_bb2f79918825f22b70576b5eb92a2bdf,,,,,,,Table 19: Impact of k on Enron-Email(untargeted)
+P025,experiment_2243b362d7f0bae31a2670f8c9f4ea51,,,,,,,Table 20: Impact of re-ranking(untargeted)
+P025,experiment_aa02e25b6eaa10a4184af994a9e4856f,,,,,,,Table 22: Impact of summarization(untargeted)
+P025,experiment_2707b0284babadbe0f0632a491ac5961,,,,,,,Table 25: Impact of threshold(untargeted)
+P052,experiment_2060e6e1c8392460452f107844816ccc,,,,,,,Table 4: Main retrieval on the 644-instance test split aligned with generation/error analysis. AuthorityFirst-RAG
+P052,experiment_cb9e9fa6d089a1301c2da3c1be74f1d7,,,,,,,"Table 12: Full-benchmark retrieval results over all 3,220 QA instances."
+P052,experiment_42cec347f658d0a6fc6820099d1289a4,,,,,,,Table 13: Full-benchmark retrieval ablations.
+P076,experiment_24940dd1fbef7b38f32699c44aa66a10,,,,,,,Table 2: Overall Performance of RAG System with Different Knowledge Refinement Models. We use Llama3-8B-
+P088,experiment_04976774e76ed4e11b34b11642056648,,,,,,,Table 3
+P008,experiment_23856dc2409f418f5ecfe3b152d99800,,,,,,,Table 3: LLMs frequently extracts a subgraph from KG
+P008,experiment_6881f4633f7d97ebc03f80332a3d2a61,,,,,,,Table 5: Retrieval Evaluation on STA RK: H YB GRAG wins. ‘*’ denotes that only 10% of the testing questions
+P008,experiment_030c70dd765db97951353ab4a946005d,,,,,,,"Table 10: The design choices in H YB GRAG are necessary in STA RK. denotes the settings of H YB GRAG,"
+P014,experiment_c773d782d030ba3c51d22b90c7bab7c1,,,,,,,"Table 2: EM and F1 scores on the GAR-Bench test set. In the k = 1 configuration, only the gold document is"
+P014,experiment_de12ee654492d02320883edecec26cdb,,,,,,,Table 4: Performance comparison under no-document
+P014,experiment_edcc8e95038a346ed0d227601a40095a,,,,,,,Table 4: Performance comparison under no-document
+P035,experiment_2e44a69b68a0ddf05270b72948f055b6,,,,,,,Table 1: The overall evaluation results of DRAG and other baselines on six benchmarks. Blue marks the best-per-
+P035,experiment_b7d71841a5ebf58852b1d45d669d363d,,,,,,,Table 1: The overall evaluation results of DRAG and other baselines on six benchmarks. Blue marks the best-per-
+P035,experiment_c08d1f6bb995a0975cffd9c5d89457b6,,,,,,,Table 1: The overall evaluation results of DRAG and other baselines on six benchmarks. Blue marks the best-per-
+P035,experiment_7ceca28fb7ba9b08068846a18f77d44c,,,,,,,Table 1: The overall evaluation results of DRAG and other baselines on six benchmarks. Blue marks the best-per-
+P035,experiment_d48dd523a0df76c3ec27bda224988500,,,,,,,"Table 5: Ablation study for key components of DRAG on six benchmarks. Blue marks the best-performing method,"
+P035,experiment_91570c15fc0a3b3b1a33eb800329b884,,,,,,,"Table 5: Ablation study for key components of DRAG on six benchmarks. Blue marks the best-performing method,"
+P035,experiment_ade3be408eb29f1f3707f5267e940a94,,,,,,,"Table 5: Ablation study for key components of DRAG on six benchmarks. Blue marks the best-performing method,"
+P035,experiment_8d369654788847974d15b72057414931,,,,,,,"Table 5: Ablation study for key components of DRAG on six benchmarks. Blue marks the best-performing method,"
+P035,experiment_6cafdc8687a4711998ddeb1537efdd30,,,,,,,Table 6: The detailed performance metrics of DRAG across six datasets under different debate round settings in the
+P035,experiment_d7bb92fa0550e0dfbe27c5a0bbc02e92,,,,,,,Table 6: The detailed performance metrics of DRAG across six datasets under different debate round settings in the
+P035,experiment_5b22dc30133f16b3ee2207aeb4542e9d,,,,,,,Table 6: The detailed performance metrics of DRAG across six datasets under different debate round settings in the
+P035,experiment_cd08957d14f91b8ada6fa443beb105a5,,,,,,,Table 6: The detailed performance metrics of DRAG across six datasets under different debate round settings in the
+P041,experiment_7b302a5560f07ebeb841ecfb3fe37187,,,,,,,Table 1: Comparisons in terms of response quality between KG2 RAG and baselines.
+P041,experiment_f143d7533eaa6c38fd5850a095d33c83,,,,,,,Table 2: Comparisons in terms of retrieval quality between KG2 RAG and baselines.
+P041,experiment_ec61892ec9420781f9ea585daf4a0082,,,,,,,Table 6: Experimental results on HotpotQA in the distractor setting with triplets dropped.
+P080,experiment_c08a15ded6c44f03c2d4edbe210aea75,,,,,,,Table 3: Experimental results on downstream LLMs’ cross-table QA performance using T-RAG. We also report the
+P080,experiment_b884af409ac005ac8f57ed871bc22fbd,,,,,,,Table 7: Downstream results of LLMs tabular reasoning using the baseline method of TAPAS.
+P080,experiment_a96129fbff82c5c123cd694e975179e8,,,,,,,Table 7: Downstream results of LLMs tabular reasoning using the baseline method of TAPAS.
+P086,experiment_d3eb9e8b91bb40f2daf2c7f76f7ccdb3,,,,,,,Table 3: The table shows the tKG forecasting results on three benchmark datasets on multi-step tKG forecasting task. The
+P086,experiment_45a45de892d2eb2e2dcce3c5f6866f3d,,,,,,,Table 4: The table presents tKG forecasting results on two benchmark datasets on multi-step tKG forecasting task. The evaluation
+P021,experiment_da1f3bb39b02a4c0b4fbc941733bc0b8,,,,,,,Table 11: Kendall’s Tau agreement between M I RAGE human annotated judgments (ICJ[1-3]) and human annotated
+P027,experiment_661bf4bbd71097356396c48a1fe9cf5a,,,,,,,Table 2: Performance and latency analysis of S PECULATIVE RAG on TriviaQA and PubHealth
+P087,experiment_d5b587782a64c30ef5d2019153c34786,,,,,,,"Table 2: The performance comparison across Simple QA, Multi-Hop QA, and Multi-Doc QA benchmarks using"
+P087,experiment_ef39ea1a47bd285bdba5092c92a2499b,,,,,,,"Table 2: The performance comparison across Simple QA, Multi-Hop QA, and Multi-Doc QA benchmarks using"
+P087,experiment_183e88fd4b9e9a821100588fbf4f8e71,,,,,,,"Table 2: The performance comparison across Simple QA, Multi-Hop QA, and Multi-Doc QA benchmarks using"
+P087,experiment_f3ec11027d478f5beb23c389b40d174d,,,,,,,"Table 2: The performance comparison across Simple QA, Multi-Hop QA, and Multi-Doc QA benchmarks using"

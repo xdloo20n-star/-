@@ -184,7 +184,7 @@ def average_rows(page: Page, lines: list[str], index: int, layout: re.Match[str]
         if len(tokens) <= len(centers):
             return []
         values = tokens[-len(centers):]
-        if not (values[-1][0].isdigit() and all(FRACTION.fullmatch(value[0]) for value in values[:-1])):
+        if not (values[-1][0].isdecimal() and all(FRACTION.fullmatch(value[0]) for value in values[:-1])):
             return []
         if any(not left <= (value.start() + value.end()) / 2 < right
                for value, left, right in zip(values, boundaries[:-1], boundaries[1:], strict=True)):
@@ -239,7 +239,7 @@ def efficiency_rows(page: Page, lines: list[str], index: int, occupied: set[tupl
                for value, left, right in zip(values, boundaries[:-1], boundaries[1:], strict=True)):
             return []
         sections = re.split(r"\s{2,}", line[:values[0].start()].strip())
-        if len(sections) != 2 or sections[-1] not in {"Agentic Chunking", "W-RAC"} or not values[4][0].isdigit():
+        if len(sections) != 2 or sections[-1] not in {"Agentic Chunking", "W-RAC"} or not values[4][0].isdecimal():
             return []
         group, method = sections
         dataset = f"RAG-Multi-Corpus / {group}" if benchmark else group

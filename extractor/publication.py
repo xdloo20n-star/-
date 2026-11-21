@@ -6,6 +6,10 @@ import math
 import re
 from typing import Any
 
+from context_recall_tables import read_context_recall_tables
+
+from benchmark_distribution import read_benchmark_distributions
+
 from failure_rates import failure_rate_definition
 from factuality_tables import read_factuality_tables
 from failure_diagnostics import order_audit_summaries
@@ -16,6 +20,7 @@ from paired_scores import enrich_repeated_score_rows, read_additional_score_tabl
 from pdf_pages import PDF, Page
 from qa_comparison import enrich_qa_comparisons
 from rag_tables import Column, MISSING, Table, read_tables
+from reasoning_tables import read_reasoning_tables
 from retrieval_tables import read_retrieval_tables
 from training_tables import read_training_tables
 from watermark_tables import read_watermark_tables
@@ -274,8 +279,11 @@ def extract_publication(pdf: PDF) -> dict[str, Any]:
     extracted_tables += read_knowledge_benchmarks(pdf.pages, extracted_tables)
     extracted_tables += read_watermark_tables(pdf.pages, extracted_tables)
     extracted_tables += read_retrieval_tables(pdf.pages, extracted_tables)
+    extracted_tables += read_benchmark_distributions(pdf.pages, extracted_tables)
     extracted_tables += read_training_tables(pdf.pages, extracted_tables)
+    extracted_tables += read_context_recall_tables(pdf.pages, extracted_tables)
     extracted_tables = read_factuality_tables(pdf.pages, extracted_tables)
+    extracted_tables = read_reasoning_tables(pdf.pages, extracted_tables)
     extracted_tables = enrich_grouped_scores(pdf.pages, extracted_tables)
     extracted_tables = enrich_repeated_score_rows(pdf.pages, extracted_tables)
     extracted_tables = enrich_qa_comparisons(pdf.pages, extracted_tables)
@@ -472,6 +480,8 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
             config_name = row
         if table.config_name:
             config_name = table.config_name
+        if table.family == "benchmark_distribution":
+            config_name = None
         configurations = {}
         for column, raw in zip(table.columns, values, strict=True):
             generator = column.generator
@@ -551,9 +561,9 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
                              table_column=column_title, **source)
 
 
-def add_configuration(payload: Payload, table: Table, row: str, name: str,
+def add_configuration(payload: Payload, table: Table, row: str, name: str | None,
                       row_locator: str, column: Column) -> str:
-    cutoff = TOP_K.search(row)
+    cutoff = TOP_K.search(row) if name is not None else None
     generator = column.generator
     context = {"retriever_model": table.retriever_model} if table.retriever_model else {}
     if column.generator_version:
@@ -562,8 +572,9 @@ def add_configuration(payload: Payload, table: Table, row: str, name: str,
         "configurations", "config_id", "config", rag_variant=name,
         generator_model=generator, top_k=int(cutoff[1]) if cutoff else table.top_k, **context,
     )
-    payload.cite("configuration", config_id, "rag_variant", table.page, row,
-                 table_row=row_locator, table=table.label)
+    if name is not None:
+        payload.cite("configuration", config_id, "rag_variant", table.page, row,
+                     table_row=row_locator, table=table.label)
     if cutoff:
         payload.cite("configuration", config_id, "top_k", table.page, cutoff[0],
                      table_row=row_locator, table=table.label)

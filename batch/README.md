@@ -14,6 +14,8 @@ python3 -m batch run /path/to/test \
 
 The CLI reports job IDs and status changes on stderr. `--timeout` is the wait budget in seconds after uploads. `--request-timeout` and `--poll-interval` default to 30 and 2 seconds. If a job fails or the wait expires, the command returns 1 with the affected IDs and any error the API supplied. Already queued jobs continue on the server. The Go logs include the extractor's error details.
 
+The CLI retries reads of the document list or job status up to twice after a temporary network failure or HTTP 408, 502, 503 or 504. Retries use the remaining wait budget. After an upload connection fails, use `run --resume` to see whether the server accepted the job before uploading again.
+
 ## Resume jobs
 
 Use the same API instance. `run --resume` looks for existing jobs by corpus ID and uploads only inputs without a match. The `resume` subcommand waits for exactly the requested corpus IDs and requires all of them to exist.

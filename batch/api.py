@@ -1,9 +1,12 @@
 """HTTP client for Sverka's document queue."""
 
+import errno
 import http.client
 import itertools
 import json
 import os
+import socket
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -12,6 +15,14 @@ import uuid
 
 class APIError(Exception):
     pass
+
+
+class TemporaryAPIError(APIError):
+    pass
+
+
+TEMPORARY_HTTP_STATUSES = {408, 502, 503, 504}
+TEMPORARY_NETWORK_ERRORS = {errno.ENETDOWN, errno.ENETUNREACH, errno.EHOSTUNREACH, socket.EAI_AGAIN}
 
 
 def problem_text(problem):
@@ -48,17 +59,37 @@ class SverkaAPI:
                 except (ValueError, OSError, http.client.HTTPException):
                     reason = ""
             missing = " (missing document or endpoint)" if exc.code == 404 else ""
-            raise APIError(f"{label}: HTTP {exc.code}{missing}: {reason or exc.reason}") from exc
-        except (TimeoutError, urllib.error.URLError) as exc:
+            error = TemporaryAPIError if exc.code in TEMPORARY_HTTP_STATUSES else APIError
+            raise error(f"{label}: HTTP {exc.code}{missing}: {reason or exc.reason}") from exc
+        except (OSError, http.client.HTTPException) as exc:
             reason = getattr(exc, "reason", exc)
+            temporary = isinstance(reason, (TimeoutError, ConnectionError, http.client.IncompleteRead)) or (
+                isinstance(reason, OSError) and reason.errno in TEMPORARY_NETWORK_ERRORS
+            )
+            error = TemporaryAPIError if temporary else APIError
             if isinstance(reason, TimeoutError):
                 reason = f"request timed out after {timeout:.2f}s"
-            raise APIError(f"{label}: {reason}") from exc
-        except (OSError, http.client.HTTPException, ValueError) as exc:
+            raise error(f"{label}: {reason}") from exc
+        except ValueError as exc:
             raise APIError(f"{label}: {exc}") from exc
         if not isinstance(result, dict):
             raise APIError(f"{label}: expected a JSON object")
         return result
+
+    def get(self, path, *, timeout=None):
+        deadline = time.monotonic() + (self.request_timeout if timeout is None else timeout)
+        last_error = None
+        for retry_delay in (0.2, 0.4, None):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise APIError(f"GET {path}: read deadline exceeded") from last_error
+            try:
+                return self.request("GET", path, timeout=remaining)
+            except TemporaryAPIError as exc:
+                if retry_delay is None or retry_delay >= deadline - time.monotonic():
+                    raise
+                last_error = exc
+                time.sleep(retry_delay)
 
     def upload(self, pdf):
         boundary = uuid.uuid4().hex
@@ -79,13 +110,13 @@ class SverkaAPI:
 
     def detail(self, document_id, *, timeout=None):
         path = "/documents/" + urllib.parse.quote(document_id, safe="")
-        return self.request("GET", path, timeout=timeout)
+        return self.get(path, timeout=timeout)
 
     def documents(self):
         page_size = 100
         page = 1
         while True:
-            response = self.request("GET", f"/documents?page={page}&page_size={page_size}")
+            response = self.get(f"/documents?page={page}&page_size={page_size}")
             items, total = response.get("items"), response.get("total")
             if (not isinstance(items, list) or any(not isinstance(item, dict) for item in items)
                     or type(total) is not int or total < 0):

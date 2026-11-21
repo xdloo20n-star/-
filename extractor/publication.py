@@ -1,11 +1,14 @@
 """Map PDF captions, headers, and cells to the Sverka extraction contract."""
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 import math
 import re
 from typing import Any
 
+from grouped_scores import enrich_grouped_scores
 from pdf_pages import PDF, Page
+from qa_comparison import enrich_qa_comparisons
 from rag_tables import Column, MISSING, Table, read_tables
 
 RAG = re.compile(r"\bRAG(?:s)?\b|retrieval[\s-]+augmented\s+generation", re.I)
@@ -256,8 +259,13 @@ def extract_publication(pdf: PDF) -> dict[str, Any]:
         return payload.as_dict()
 
     question_answering = bool(TASK_TYPE.search(beginning) or TASK_TYPE.search(title or ""))
-    for page in pdf.pages:
-        tables = read_tables(page)
+    extracted_tables = [table for page in pdf.pages for table in read_tables(page)]
+    extracted_tables = enrich_grouped_scores(pdf.pages, extracted_tables)
+    extracted_tables = enrich_qa_comparisons(pdf.pages, extracted_tables)
+    by_page = defaultdict(list)
+    for table in extracted_tables:
+        by_page[table.page.number].append(table)
+    for tables in by_page.values():
         for table in tables:
             add_table(payload, table, question_answering, tables)
     return payload.as_dict()
@@ -416,6 +424,7 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
 
     parent_name = ""
     for row, values in table.rows:
+        row_locator = f"{table.row_section} / {row}" if table.row_section else row
         if row.startswith(("-", "–", "—")) and parent_name:
             config_name = f"{parent_name} / {row}"
         else:
@@ -425,7 +434,7 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
         for column, raw in zip(table.columns, values, strict=True):
             generator = column.generator
             if generator not in configurations:
-                configurations[generator] = add_configuration(payload, table, row, config_name, generator)
+                configurations[generator] = add_configuration(payload, table, row, config_name, generator, row_locator)
             config_id = configurations[generator]
             dataset_id, task_id, experiment_id = datasets[column.dataset, column.original_row]
             header = column.header
@@ -444,11 +453,13 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
                 aggregation=column.aggregation, result_origin=origin,
                 cited_publication_id=citation[1] if citation else None, extraction_status=status,
             )
-            column_title = " / ".join(item for item in [generator, column.dataset, header.label, column.aggregation] if item)
+            column_generator = generator if not table.row_section else None
+            column_title = " / ".join(item for item in
+                                      [column_generator, column.dataset, header.label, column.aggregation] if item)
             if column.original_row:
                 column_title = f"{row} / {header.label}"
             payload.cite("result", result_id, "raw_value", table.page, raw,
-                         table_row=column.original_row or row, table_column=column_title, **source)
+                         table_row=column.original_row or row_locator, table_column=column_title, **source)
             if variant_fragment:
                 payload.cite("result", result_id, "metric_variant", table.page, variant_fragment,
                              table_column=column_title, **source)
@@ -456,23 +467,29 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
             if alias and alias_fragment:
                 payload.cite("result", result_id, "metric_name", table.page, alias_fragment,
                              table_column=column_title, **source)
+            elif column.name_evidence:
+                payload.cite("result", result_id, "metric_name", *column.name_evidence)
+            if column.aggregation_evidence:
+                payload.cite("result", result_id, "aggregation", *column.aggregation_evidence)
             if unit_fragment and not header.unit and not raw.endswith("%"):
                 payload.cite("result", result_id, "raw_unit", table.page, unit_fragment,
                              table_column=column_title, **source)
 
 
-def add_configuration(payload: Payload, table: Table, row: str, name: str, generator: str | None) -> str:
+def add_configuration(payload: Payload, table: Table, row: str, name: str, generator: str | None,
+                      row_locator: str) -> str:
     cutoff = TOP_K.search(row)
     config_id = payload.add(
         "configurations", "config_id", "config", rag_variant=name,
         generator_model=generator, top_k=int(cutoff[1]) if cutoff else None,
     )
     payload.cite("configuration", config_id, "rag_variant", table.page, row,
-                 table_row=row, table=table.label)
+                 table_row=row_locator, table=table.label)
     if cutoff:
         payload.cite("configuration", config_id, "top_k", table.page, cutoff[0],
-                     table_row=row, table=table.label)
+                     table_row=row_locator, table=table.label)
     if generator:
+        locator = {"table_row": table.row_section} if table.row_section else {"table_column": generator}
         payload.cite("configuration", config_id, "generator_model", table.page, generator,
-                     table_column=generator, table=table.label)
+                     table=table.label, **locator)
     return config_id

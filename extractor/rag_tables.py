@@ -60,6 +60,8 @@ class Column:
     aggregation: str | None = None
     generator: str | None = None
     original_row: str | None = None
+    name_evidence: tuple[Page, str] | None = None
+    aggregation_evidence: tuple[Page, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,8 @@ class Table:
     index: int
     columns: list[Column]
     rows: list[tuple[str, list[str]]]
+    row_section: str | None = None
+    family: str | None = None
 
 
 def headers(line: str) -> list[Header]:
@@ -167,12 +171,15 @@ def assign_groups(columns: list[Header], groups: list[tuple[str, float]]) -> lis
 
 
 def read_tables(page: Page) -> list[Table]:
+    from grouped_scores import read_grouped_scores
+    from qa_comparison import read_qa_comparisons
+
     lines = page.text.splitlines()
     captions = [(i, match) for i, line in enumerate(lines) if (match := CAPTION.match(line))]
-    tables = []
+    tables, grouped_headers = read_grouped_scores(page, lines)
     used_until = -1
     for index, line in enumerate(lines):
-        if index <= used_until:
+        if index <= used_until or index in grouped_headers:
             continue
         found = headers(line)
         if not found or len(found) > 24:
@@ -226,6 +233,7 @@ def read_tables(page: Page) -> list[Table]:
     tables.extend(read_transposed_tables(page, lines, captions, occupied))
     if page.verification == "text_match":
         tables.extend(read_native_comparisons(page, lines, occupied))
+        tables.extend(read_qa_comparisons(page, lines, occupied))
     return sorted(tables, key=lambda table: table.index)
 
 
@@ -257,6 +265,39 @@ def read_native_comparisons(page: Page, lines: list[str], occupied: set[str]) ->
 
 def in_column(value: re.Match[str], heading: re.Match[str]) -> bool:
     return value.start() <= heading.end() + 4 and value.end() >= heading.start() - 4
+
+
+def column_boundaries(centers: list[float]) -> list[float]:
+    left_edge = centers[0] - (centers[1] - centers[0]) / 2
+    right_edge = centers[-1] + (centers[-1] - centers[-2]) / 2
+    return [left_edge, *((left + right) / 2 for left, right in pairwise(centers)), right_edge]
+
+
+def aligned_values(line: str, boundaries: list[float], annotation: str = "") -> tuple[int, list[str]] | None:
+    width = len(boundaries) - 1
+    tokens = list(TOKEN.finditer(line))[-width:]
+    if len(tokens) != width:
+        return None
+    values = []
+    for token, (left, right) in zip(tokens, pairwise(boundaries), strict=True):
+        center = (token.start() + token.end()) / 2
+        value = token[0].removesuffix(annotation)
+        if not left < center < right or GROUPED_NUMBER.fullmatch(value):
+            return None
+        if not NUMBER.fullmatch(value) and value not in MISSING:
+            return None
+        values.append(value)
+    return tokens[0].start(), values
+
+
+def aligned_label(line: str, label_at: int, value_at: int) -> str | None:
+    match = TOKEN.search(line, max(0, label_at - 1), value_at)
+    if not match or abs(match.start() - label_at) > 2:
+        return None
+    label = line[match.start():value_at].strip()
+    if re.search(r"[^\W\d_]", label) and not re.search(r"\s{2,}", label):
+        return label
+    return None
 
 
 def read_centered_benchmarks(page: Page, lines: list[str], index: int, cells: list[re.Match[str]],

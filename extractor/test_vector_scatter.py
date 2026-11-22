@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import patch
 
 from pdf_pages import Page, Word
-from vector_scatter import read_page_geometry, read_panel_geometry
+from vector_scatter import read_page_geometry, read_panel_geometry, read_vector_noisy_scatter
 
 
 # D014 PDF page 16, Figure 10, GPT-4o-mini / Wizard of Wikipedia panel.
@@ -74,6 +74,34 @@ def second_point_svg(enlarged):
 </svg>"""
 
 
+# D014 page 13, Figure 5, point 151. The plotted axes label precision and recall.
+NOISY_SVG = f"""<svg viewBox="0 0 595.276 841.89" xmlns="http://www.w3.org/2000/svg">
+<path fill="rgb(100%, 100%, 100%)" fill-opacity="1" d="M 333.238281 222.667969 L 468.054688 222.667969 L 468.054688 97.089844 L 333.238281 97.089844 Z"/>
+<path fill="none" stroke="rgb(12%, 47%, 71%)" stroke-opacity="0.8" d="{MARK}" transform="matrix(1, 0, 0, -1, 367.184355, 193.704204)"/>
+<path fill="none" stroke="rgb(0%, 0%, 0%)" d="M 339.3633 222.668 L 339.3633 224.32"/>
+<path fill="none" stroke="rgb(0%, 0%, 0%)" d="M 363.8789 222.668 L 363.8789 224.32"/>
+<path fill="none" stroke="rgb(0%, 0%, 0%)" d="M 388.3907 222.668 L 388.3907 224.32"/>
+<path fill="none" stroke="rgb(0%, 0%, 0%)" d="M 333.2383 216.9570 L 331.586 216.9570"/>
+<path fill="none" stroke="rgb(0%, 0%, 0%)" d="M 333.2383 194.1289 L 331.586 194.1289"/>
+<path fill="none" stroke="rgb(0%, 0%, 0%)" d="M 333.2383 171.2968 L 331.586 171.2968"/>
+</svg>"""
+
+NOISY_WORDS = (
+    Word("0.0", 336.020162, 222.250653, 343.532334, 231.185807),
+    Word("0.2", 360.562156, 222.250653, 368.074328, 231.185807),
+    Word("0.4", 385.104150, 222.250653, 392.616322, 231.185807),
+    Word("0.0", 322.819856, 213, 330.332028, 221),
+    Word("0.2", 322.819856, 190.1, 330.332028, 198.1),
+    Word("0.4", 322.819856, 167.3, 330.332028, 175.3),
+    Word("Knowledge", 376.834053, 228.710117, 402.810103, 237.645270),
+    Word("Precision", 404.312537, 228.710117, 425.398293, 237.645270),
+    Word("Figure", 306.144307, 249.567942, 332.678229, 261.573475),
+    Word("5:", 335.533852, 249.567942, 343.440169, 261.573475),
+    Word("Knowledge", 312.823049, 154.425290, 321.758203, 180.401340),
+    Word("Recall", 312.823049, 138.818635, 321.758203, 152.922855),
+)
+
+
 class VectorScatterTest(unittest.TestCase):
     def test_reads_marker_using_both_pdf_tick_axes_and_preserves_bbox(self):
         panels = read_panel_geometry(SVG, WORDS, (595.276, 841.89))
@@ -121,3 +149,23 @@ class VectorScatterTest(unittest.TestCase):
                 self.assertEqual((f"{point.x:.4f}", f"{point.y:.4f}"), ("0.0000", expected))
                 self.assertAlmostEqual((point.bbox[0] + point.bbox[2]) / 2, 0.18119955, places=7)
                 self.assertAlmostEqual((point.bbox[1] + point.bbox[3]) / 2, 0.34586920, places=7)
+
+    def test_reads_noisy_scatter_only_above_its_caption_with_both_axis_labels(self):
+        page = Page(13, "Figure 5: Scatter plot of answer F1 versus the knowledge precision for "
+                        "GPT-4o-mini on noisy HotpotQA.", "text_match")
+        with patch("vector_scatter.run", return_value=NOISY_SVG):
+            with patch("vector_scatter.positioned_words", return_value=(NOISY_WORDS, (595.276, 841.89))):
+                figure, = read_vector_noisy_scatter(Path("noisy.pdf"), [page])
+            self.assertEqual((figure.label, figure.metric, figure.vertical_metric, figure.condition),
+                             ("Figure 5", "Knowledge precision", "Knowledge recall", "noisy knowledge annotations"))
+            panel, = figure.panels
+            self.assertEqual((panel.dataset, panel.generator), ("Noisy HotpotQA", "GPT-4o-mini"))
+            point, = panel.points
+            self.assertEqual((f"{point.x:.4f}", f"{point.y:.4f}"), ("0.2270", "0.2037"))
+            self.assertLess(point.bbox[0], 0.61683)
+            self.assertGreater(point.bbox[2], 0.61683)
+            self.assertLess(point.bbox[1], 0.23008)
+            self.assertGreater(point.bbox[3], 0.23008)
+            for words in (NOISY_WORDS[:-1], NOISY_WORDS[:8] + NOISY_WORDS[10:]):
+                with patch("vector_scatter.positioned_words", return_value=(words, (595.276, 841.89))):
+                    self.assertEqual(read_vector_noisy_scatter(Path("noisy.pdf"), [page]), ())

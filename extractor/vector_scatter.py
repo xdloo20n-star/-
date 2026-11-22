@@ -27,6 +27,10 @@ CAPPED_CAPTION = re.compile(
     r"(Wizard of Wikipedia) \(left\) and (HotpotQA) \(right\) by limiting the number of knowledge sentences up to k\s*=\s*(\d+)\.",
     re.I,
 )
+NOISY_CAPTION = re.compile(
+    r"\b(Figure \d+): Scatter plot of answer F1 versus the knowledge precision for ([\w.-]+) on noisy HotpotQA\.",
+    re.I,
+)
 SVG = "{http://www.w3.org/2000/svg}"
 NUMBER = r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?"
 COORD = re.compile(NUMBER)
@@ -158,12 +162,55 @@ def read_vector_length_scatter(path: Path, pages: list[Page]) -> tuple[ScatterFi
     return ()
 
 
-def read_page_geometry(path: Path, page: Page, *, marker_opacity: str = "0.5", refine: bool = True) -> PageGeometry:
+def read_vector_noisy_scatter(path: Path, pages: list[Page]) -> tuple[ScatterFigure, ...]:
+    figures = []
+    for page in pages:
+        if page.verification != "text_match" or not (caption := NOISY_CAPTION.search(page.prose)):
+            continue
+        geometry = read_page_geometry(path, page, marker_opacity="0.8", figure=caption[1])
+        if len(geometry) != 1:
+            continue
+        panel = ScatterPanel("Noisy HotpotQA", caption[2], geometry[0])
+        figures.append(ScatterFigure(page, caption[1], "Knowledge precision", (panel,),
+                                     "Knowledge recall", "noisy knowledge annotations"))
+    return tuple(figures)
+
+
+def scatter_caption_region(words: tuple[Word, ...], width: float, figure: str) -> Box | None:
+    label, number = figure.split()
+    captions = [first for first, second in zip(words, words[1:]) if
+                (first.text.casefold(), second.text) == (label.casefold(), f"{number}:")
+                and abs(first.y - second.y) < 1 and 0 <= second.x0 - first.x1 < 8]
+    if len(captions) != 1:
+        return None
+    caption, = captions
+    region = Box(caption.x0, 0, width, caption.y0)
+    # The caption describes the color outcome. Verify both PDF axis labels
+    # in the panel above it before interpreting the marker coordinates.
+    visible = tuple(word for word in words if region.contains(word.x, word.y))
+    labels = set()
+    for first, second in zip(visible, visible[1:]):
+        if first.text != "Knowledge":
+            continue
+        if (second.text == "Precision" and abs(first.y - second.y) < 1
+                and 0 <= second.x0 - first.x1 < 6):
+            labels.add("Precision")
+        if (second.text == "Recall" and abs(first.x - second.x) < 1
+                and 0 <= first.y0 - second.y1 < 6):
+            labels.add("Recall")
+    return region if labels == {"Precision", "Recall"} else None
+
+
+def read_page_geometry(path: Path, page: Page, *, marker_opacity: str = "0.5", refine: bool = True,
+                       figure: str | None = None) -> PageGeometry:
     command = ["pdftocairo", "-f", str(page.number), "-l", str(page.number), "-svg"]
     try:
         words, size = positioned_words(path, page.number)
+        region = scatter_caption_region(words, size[0], figure) if figure else None
+        if figure and region is None:
+            return ()
         svg = run([*command, str(path), "-"], timeout=40)
-        ordinary = read_panel_geometry(svg, words, size, marker_opacity=marker_opacity)
+        ordinary = read_panel_geometry(svg, words, size, marker_opacity=marker_opacity, region=region)
     except (ExtractionError, ElementTree.ParseError, KeyError, ValueError) as error:
         print(f"page {page.number}, scatter plot: {error}", file=sys.stderr)
         return ()
@@ -175,7 +222,8 @@ def read_page_geometry(path: Path, page: Page, *, marker_opacity: str = "0.5", r
         # surface lowers that error before the axes and markers are calibrated.
         enlarged = run([*command, "-expand", "-nocenter", "-paperw", width, "-paperh", height, str(path), "-"],
                        timeout=40)
-        candidate = read_panel_geometry(enlarged, words, size, marker_opacity=marker_opacity, expansion=SVG_EXPANSION)
+        candidate = read_panel_geometry(enlarged, words, size, marker_opacity=marker_opacity,
+                                        expansion=SVG_EXPANSION, region=region)
     except (ExtractionError, ElementTree.ParseError, KeyError, ValueError):
         return ordinary
     if tuple(map(len, candidate)) != tuple(map(len, ordinary)):
@@ -301,7 +349,7 @@ def calibration(ticks: list[tuple[float, float]], *, vertical: bool) -> Affine |
 
 
 def read_panel_geometry(svg: str | bytes, words: tuple[Word, ...], size: tuple[float, float], *,
-                        marker_opacity: str = "0.5", expansion: int = 1) -> PageGeometry:
+                        marker_opacity: str = "0.5", expansion: int = 1, region: Box | None = None) -> PageGeometry:
     root = ElementTree.fromstring(svg)
     view = tuple(map(float, root.attrib.get("viewBox", "").split()))
     if root.tag != SVG + "svg" or len(view) != 4 or view[:2] != (0, 0) or any(
@@ -313,6 +361,9 @@ def read_panel_geometry(svg: str | bytes, words: tuple[Word, ...], size: tuple[f
     boxes = [box for attributes in paths if (box := white_rectangle(attributes, scale))]
     ticks = [tick for attributes in paths if (tick := tick_segment(attributes, scale))]
     markers = [marker for attributes in paths if (marker := scatter_marker(attributes, marker_opacity, scale))]
+    if region:
+        boxes = [box for box in boxes if region.contains(box.x0, box.y0) and region.contains(box.x1, box.y1)]
+        markers = [marker for marker in markers if region.contains(marker[0], marker[1])]
     numeric = tuple(word for word in words if DECIMAL.fullmatch(word.text))
     panels = []
     width, height = size

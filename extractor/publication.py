@@ -31,7 +31,7 @@ from scanned_score_tables import read_scanned_score_tables
 from training_scan import read_training_scan_tables
 from training_scan_pairs import read_training_scan_pairs
 from training_tables import read_training_tables
-from vector_scatter import ScatterFigure, read_vector_length_scatter, read_vector_scatter
+from vector_scatter import ScatterFigure, read_vector_length_scatter, read_vector_noisy_scatter, read_vector_scatter
 from watermark_tables import read_watermark_tables
 
 RAG = re.compile(r"\bRAG(?:s)?\b|retrieval[\s-]+augmented\s+generation", re.I)
@@ -316,7 +316,8 @@ def extract_publication(pdf: PDF, *, source_path: Path | None = None) -> dict[st
     for table in audit_summaries:
         add_table(payload, table, question_answering, by_page[table.page.number], duplicate_index)
     if source_path is not None:
-        figures = read_vector_scatter(source_path, pdf.pages) + read_vector_length_scatter(source_path, pdf.pages)
+        figures = (read_vector_scatter(source_path, pdf.pages) + read_vector_length_scatter(source_path, pdf.pages)
+                   + read_vector_noisy_scatter(source_path, pdf.pages))
         add_scatter_figures(payload, figures)
     return payload.as_dict()
 

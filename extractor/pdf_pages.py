@@ -1,16 +1,51 @@
 """Extract page text with Poppler and use optical recognition for scanned pages."""
 
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import sys
+from xml.etree import ElementTree
 
 TABLE_HEADING = re.compile(r"^\s*table\s+(?:\d+|[ivxlcdm]+)\b", re.I | re.M)
 CONTROL_GLYPHS = re.compile(r"[\x00-\x08\x0b-\x0c\x0e-\x1f]")
+FAILURE_RATE_HEADINGS = re.compile(r"\bLeak\s*(?:↓\s*)?Stale\s*(?:↓\s*)?Unsup\.", re.I)
+POSITIONED_TABLE = re.compile(
+    r"Statistics of XRAG question types|Statistics of the datasets\.\s+#Doc|"
+    r"Number of examples and percentages by|Retrieval performance comparison on the|"
+    r"Ablation study on Bayesian components|Performance comparison with different generator models on MMLongBench-Doc|"
+    r"Performance comparison on DocBench with different generators|"
+    r"LLM QA accuracy in (?:answering XRAG ques|the XRAG (?:monolingual|multilingual))|"
+    r"Controlled analysis of (?:GPT-4o|Claude Sonnet 3\.5|Mistral-large|Command-R\+) on|"
+    r"\b(?:Training Strategies|Sizes)\s{2,}F1 +Step +All +No +One +Multi\b", re.I,
+)
+
+
+@dataclass(frozen=True)
+class Word:
+    text: str
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+    @property
+    def x(self) -> float:
+        return (self.x0 + self.x1) / 2
+
+    @property
+    def y(self) -> float:
+        return (self.y0 + self.y1) / 2
+
+
+@dataclass(frozen=True)
+class ScanSource:
+    path: Path
+    number: int
+    engine: str
 
 
 @dataclass(frozen=True)
@@ -19,6 +54,9 @@ class Page:
     text: str
     verification: str
     reading_text: str = ""
+    words: tuple[Word, ...] = ()
+    size: tuple[float, float] | None = None
+    scan: ScanSource | None = None
 
     @property
     def prose(self) -> str:
@@ -90,6 +128,18 @@ def poppler_text(path: Path, count: int, *flags: str) -> list[str]:
     ]
 
 
+def positioned_words(path: Path, number: int) -> tuple[tuple[Word, ...], tuple[float, float]]:
+    data = run(["pdftotext", "-f", str(number), "-l", str(number), "-enc", "UTF-8", "-bbox", str(path), "-"])
+    document = ElementTree.fromstring(CONTROL_GLYPHS.sub(" ", as_text(data)))
+    page = document.find(".//{*}page")
+    if page is None:
+        raise ExtractionError("Poppler did not return page coordinates")
+    words = tuple(Word(word.text, float(word.attrib["xMin"]), float(word.attrib["yMin"]),
+                       float(word.attrib["xMax"]), float(word.attrib["yMax"]))
+                  for word in page.findall(".//{*}word") if word.text)
+    return words, (float(page.attrib["width"]), float(page.attrib["height"]))
+
+
 def scanned_page(path: Path, number: int, engine: str) -> Page:
     try:
         layout, reading = ocr_page(path, number, engine)
@@ -104,7 +154,7 @@ def scanned_page(path: Path, number: int, engine: str) -> Page:
         except ExtractionError as error:
             print(f"page {number}, high resolution: {error}", file=sys.stderr)
     if usable(layout):
-        return Page(number, layout, "ocr_match", reading)
+        return Page(number, layout, "ocr_match", reading, scan=ScanSource(path, number, engine))
     return Page(number, "", "unverified")
 
 
@@ -120,6 +170,16 @@ def read_pdf(path: Path) -> PDF:
     pages = [Page(number, native, "text_match", reading[number - 1]) if usable(native)
              else Page(number, "", "unverified")
              for number, native in enumerate(text, start=1)]
+    for i, page in enumerate(pages):
+        if page.verification != "text_match" or not (
+            FAILURE_RATE_HEADINGS.search(page.text) or POSITIONED_TABLE.search(page.text)
+        ):
+            continue
+        try:
+            words, size = positioned_words(path, page.number)
+            pages[i] = replace(page, words=words, size=size)
+        except (ExtractionError, ElementTree.ParseError, KeyError, ValueError) as error:
+            print(f"page {page.number}, table coordinates: {error}", file=sys.stderr)
     missing = [page.number for page in pages if not page.text]
     if missing and not engine:
         print("Tesseract is unavailable, scanned pages will be marked unreadable", file=sys.stderr)

@@ -15,7 +15,8 @@ def main() -> int:
     parser.add_argument("--pdf", required=True, type=Path)
     args = parser.parse_args()
     try:
-        result = extract_publication(read_pdf(args.pdf.resolve(strict=True)))
+        path = args.pdf.resolve(strict=True)
+        result = extract_publication(read_pdf(path), source_path=path)
         json.dump(result, sys.stdout, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
         print()
     except (ExtractionError, OSError, ValueError) as error:

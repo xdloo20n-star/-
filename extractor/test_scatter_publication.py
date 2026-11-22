@@ -2,7 +2,7 @@ from types import SimpleNamespace
 import unittest
 
 from pdf_pages import Page
-from publication import Payload, add_scatter_figures
+from publication import Payload, add_histogram_figures, add_scatter_figures
 
 
 class ScatterPublicationTest(unittest.TestCase):
@@ -11,8 +11,8 @@ class ScatterPublicationTest(unittest.TestCase):
         label = f"Figure {number}"
         page = Page(number + 11, f"{label}: Knowledge versus Answer F1.", "text_match")
         positions = [
-            SimpleNamespace(x=.1342, y=first, bbox=(.18, .34, .19, .35)),
-            SimpleNamespace(x=.1342, y=.1992, bbox=(.28, .34, .29, .35)),
+            SimpleNamespace(x=.1342, y=first, bbox=(.18, .34, .19, .35), contour=None),
+            SimpleNamespace(x=.1342, y=.1992, bbox=(.28, .34, .29, .35), contour=None),
         ]
         panel = SimpleNamespace(dataset="WoW", generator="GPT-4o-mini", points=positions)
         return SimpleNamespace(page=page, label=label, metric=metric, panels=(panel,),
@@ -57,6 +57,41 @@ class ScatterPublicationTest(unittest.TestCase):
                          ("Knowledge recall", "~0.1992"))
         self.assertNotIn("duplicate_of", data.results[5])
         self.assertNotEqual(data.results[1]["experiment_id"], data.results[5]["experiment_id"])
+
+    def test_contour_emits_only_answer_f1_with_the_vertex_locator(self):
+        data = Payload(document={}, publication={})
+        figure = self.figure(6, None, .6017, condition="noisy knowledge annotation contours")
+        point = figure.panels[0].points[0]
+        point.contour = (5, 7)
+        figure.panels[0].points = [point]
+        add_scatter_figures(data, [figure])
+        answer, = data.results
+        source, = data.evidence
+        self.assertEqual((answer["metric_name"], answer["raw_value"], answer["reported_scale"], answer["raw_unit"]),
+                         ("Answer F1", "~0.6017", "fraction", None))
+        self.assertIn("Contour 5, vertex 7. Knowledge precision ~0.1342.", answer["note"])
+        self.assertNotIn("duplicate_of", answer)
+        self.assertEqual((source["page"], source["figure"], source["bbox"]), (17, "Figure 6", (.18, .34, .19, .35)))
+
+    def test_histogram_bar_keeps_interval_fraction_and_original_page_location(self):
+        data = Payload(document={}, publication={})
+        page = Page(13, "Figure 7: Histogram of answer F1 distributions.", "text_match")
+        bar = SimpleNamespace(dataset="WoW", metric_variant="bin1 [0.00000, 0.03259)", value=.0187259,
+                              bbox=(.60, .73, .61, .85))
+        figure = SimpleNamespace(page=page, label="Figure 7", generator="GPT-4o-mini", bars=(bar,))
+        add_histogram_figures(data, (figure,))
+        result, = data.results
+        evidence, = data.evidence
+        dataset, = data.datasets
+        config, = data.configurations
+        self.assertEqual((result["metric_name"], result["metric_variant"], result["raw_value"],
+                          result["raw_unit"], result["reported_scale"], result["aggregation"]),
+                         ("Fraction of individual-sentence outputs in F1 bin", "bin1 [0.00000, 0.03259)",
+                          "~0.0187", None, "fraction", "frequency / all individual-sentence generations"))
+        self.assertEqual((dataset["dataset_name"], config["generator_model"], config["top_k"]),
+                         ("WoW", "GPT-4o-mini", None))
+        self.assertEqual((evidence["page"], evidence["figure"], evidence["bbox"]),
+                         (13, "Figure 7", (.60, .73, .61, .85)))
 
 
 if __name__ == "__main__":

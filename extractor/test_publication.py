@@ -38,6 +38,28 @@ Table 1: Results on Natural Questions test set.
         self.assertEqual(scale_and_value("22.27", None), (None, None, 22.27, "extracted"))
         self.assertEqual(scale_and_value("033", None), (None, None, None, "present_not_extractable"))
 
+    def test_explicit_cell_units_and_approximation(self):
+        cases = (
+            ("+37.9pp", "pp", ("pp", None, 37.9, "extracted")),
+            ("−13.0%*", "%", ("%", "percent", -13.0, "extracted")),
+            ("3.863GB", "GB", ("GB", None, 3.863, "extracted")),
+            ("3.9 MB", "MB", ("MB", None, 3.9, "extracted")),
+            ("∼1000", None, (None, None, 1000.0, "extracted")),
+            ("3.9GB", "MB", ("MB", None, None, "present_not_extractable")),
+            ("∼033", None, (None, None, None, "present_not_extractable")),
+        )
+        for raw, header_unit, expected in cases:
+            with self.subTest(raw=raw):
+                self.assertEqual(scale_and_value(raw, header_unit), expected)
+
+    def test_bounds_and_ranges_keep_the_raw_measurement_without_a_scalar(self):
+        for raw, unit, scale in (("<0.001", None, None), ("<10−4", None, None),
+                                 ("−0.29–3.00", None, None), ("10–15%", "%", "percent"),
+                                 ("↓ 18.4%", "%", "percent")):
+            with self.subTest(raw=raw):
+                self.assertEqual(scale_and_value(raw, unit), (unit, scale, None, "extracted"))
+        self.assertEqual(scale_and_value("<unknown", None), (None, None, None, "present_not_extractable"))
+
     def test_out_of_scope_requires_no_dependent_rows(self):
         page = Page(1, "Experimental comparison of thin-film solar cells", "text_match")
         payload = extract_publication(PDF({}, [page]))

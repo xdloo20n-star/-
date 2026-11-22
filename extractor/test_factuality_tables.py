@@ -61,3 +61,26 @@ class FactualityTableTest(unittest.TestCase):
         self.assertEqual((result["reported_value"], result["raw_unit"], result["reported_scale"]), (-15.8, None, "percent"))
         self.assertEqual((source["page"], source["table"], source["table_row"], source["table_column"]),
                          (12, "Table 6", "SimpleQA / Baseline", "Fac."))
+
+    def test_average_row_uses_documented_macro_gain(self):
+        grid = """RAG QA factuality evaluation.
+    Benchmark               Baseline       NaiveSFT
+    CRAG (Yang et al.)          34.2%          27.8%
+    CovidQA                     80.0%          83.0%
+    Avg.                        57.1%          55.4%
+
+Table 2: Comparison of RAG QA factuality scores for different approaches.
+In this comparison we observe an overall macro-
+average gain of 5.4% over the baseline.
+"""
+        statement = "Table 5 presents the breakdown results for the baseline and proposed method."
+        for text, expected in ((grid, "macro mean across 2 benchmarks"),
+                               (grid.replace("macro-\naverage", "macroaverage"), "macro mean across 2 benchmarks"),
+                               (grid.replace("macro-\naverage", "reported"), "mean")):
+            payload = extract_publication(PDF({}, [Page(6, text, "text_match"), Page(12, statement, "text_match")]))
+            result, config, dataset, source = self.find(payload, "57.1%", "Factuality")
+            self.assertEqual((config["rag_variant"], result["aggregation"], result["raw_unit"]),
+                             ("Baseline", expected, "%"))
+            self.assertEqual((source["page"], source["table"], source["table_row"], source["table_column"]),
+                             (6, "Table 2", "Avg.", "Baseline / factuality"))
+            self.assertEqual(dataset["dataset_name"], "Macro-average over 2 RAG benchmarks" if expected != "mean" else None)

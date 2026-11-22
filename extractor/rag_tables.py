@@ -97,6 +97,9 @@ class Table:
     top_k_evidence: tuple[Page, str] | None = None
     task_type: str | None = None
     value_bboxes: tuple[tuple[tuple[float, float, float, float] | None, ...], ...] = ()
+    retrieval_method: str | None = None
+    config_note: str | None = None
+    config_note_evidence: tuple[Page, str] | None = None
 
 
 def headers(line: str) -> list[Header]:

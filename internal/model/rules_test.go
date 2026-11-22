@@ -69,6 +69,33 @@ func TestComparison(t *testing.T) {
 	}
 }
 
+func TestComparisonRequiresNumericValuesAndMatchingModes(t *testing.T) {
+	importer, err := extract.NewImporter(sverka.ExtractorSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := importer.Prepare(sverka.MockExtraction, model.Document{ID: "comparison", ExtractionMode: "mock"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	left, right := data.ResultDetail(data.Results[0]), data.ResultDetail(data.Results[1])
+	left.Normalized = nil
+	if comparison := model.Compare(left, right); comparison.Status != model.InsufficientInformation || comparison.Numeric != nil {
+		t.Fatalf("missing numeric value: %+v", comparison)
+	}
+	left = data.ResultDetail(data.Results[0])
+	left.Result = maps.Clone(left.Result)
+	left.Result["extraction_status"] = "absent"
+	if comparison := model.Compare(left, right); comparison.Status != model.InsufficientInformation || comparison.Numeric != nil {
+		t.Fatalf("absent value: %+v", comparison)
+	}
+	left = data.ResultDetail(data.Results[0])
+	right.ExtractionMode = "python"
+	if comparison := model.Compare(left, right); comparison.Status != model.NotComparable || comparison.Numeric != nil {
+		t.Fatalf("mixed extraction modes: %+v", comparison)
+	}
+}
+
 func TestCrossPublicationComparisonUsesRAGCriteria(t *testing.T) {
 	importer, err := extract.NewImporter(sverka.ExtractorSchema)
 	if err != nil {

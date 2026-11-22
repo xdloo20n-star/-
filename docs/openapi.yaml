@@ -202,7 +202,10 @@ paths:
                 right_result_id: {$ref: '#/components/schemas/ID'}
       responses:
         '200':
-          description: Comparability decision for the pair, including criteria that could not be evaluated
+          description: >-
+            Comparability decision for the pair, including criteria that could not be evaluated.
+            Different extraction modes are not comparable. A missing normalized value or a result
+            without extracted status makes a pair insufficient unless another criterion mismatches.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Comparison'}
@@ -384,7 +387,7 @@ components:
       required: [criterion, status, message]
       properties:
         criterion:
-          enum: [task, dataset, dataset_version, data_split, metric_definition, metric_k, scale, aggregation, evaluation_protocol]
+          enum: [task, dataset, dataset_version, data_split, metric_definition, metric_k, scale, aggregation, evaluation_protocol, extraction_mode, numeric_value]
         status: {enum: [match, mismatch, missing, not_applicable]}
         message: {type: string, minLength: 1}
     GroupResult:

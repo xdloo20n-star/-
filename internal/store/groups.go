@@ -9,7 +9,7 @@ import (
 // GroupCandidates reads the comparison fields from completed snapshots.
 func (s *Store) GroupCandidates(ctx context.Context) (model.GroupCandidates, error) {
 	var candidates model.GroupCandidates
-	rows, err := s.db.QueryContext(ctx, `
+	rows, err := s.exportDB.QueryContext(ctx, `
 		SELECT extraction_mode, json_remove(data_json, '$.source_document', '$.configurations', '$.evidence', '$.issues')
 		FROM documents WHERE status = 'completed'`)
 	if err != nil {

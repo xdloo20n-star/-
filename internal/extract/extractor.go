@@ -34,7 +34,7 @@ type PythonExtractor struct {
 func (PythonExtractor) Mode() string { return "python" }
 
 func (p PythonExtractor) Extract(ctx context.Context, pdfPath string) ([]byte, error) {
-	const maxOutput = 32 << 20
+	const maxOutput = 128 << 20
 	stdout := boundedOutput{limit: maxOutput}
 	stderr := boundedOutput{limit: 4 << 10}
 	cmd := exec.CommandContext(ctx, p.Executable, p.Script, "--pdf", pdfPath)

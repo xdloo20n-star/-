@@ -97,3 +97,67 @@ func TestBackfillBaselinesUpdatesStoredSnapshotsAndResultIndex(t *testing.T) {
 		}
 	}
 }
+
+func TestMigrateV2RefreshesInvalidDerivedResults(t *testing.T) {
+	ctx := t.Context()
+	path := filepath.Join(t.TempDir(), "v2.sqlite")
+	db, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.db.ExecContext(ctx, "DROP INDEX documents_corpus_uploaded"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.ExecContext(ctx, "PRAGMA user_version = 2"); err != nil {
+		t.Fatal(err)
+	}
+	doc := model.Document{ID: "legacy", OriginalFilename: "D001.pdf", ExtractionMode: "mock"}
+	if err := db.Enqueue(ctx, doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Claim(ctx); err != nil {
+		t.Fatal(err)
+	}
+	importer, err := extract.NewImporter(sverka.ExtractorSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := importer.Prepare(sverka.MockExtraction, doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, row := &data.Results[0], &data.Results[1]
+	base.Result["metric_k"] = 10.0
+	row.Result["reported_value"] = 0.6
+	row.Result["duplicate_of"] = base.Result.Text("result_id")
+	row.Normalized = &model.MeasuredValue{Value: 0.006, Unit: "fraction"}
+	if err := db.Complete(ctx, doc.ID, data); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = upgraded.Close() })
+	var index string
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT name FROM sqlite_schema
+		WHERE type = 'index' AND name = 'documents_corpus_uploaded'`).Scan(&index); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := upgraded.ResultDetail(ctx, row.Result.Text("result_id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Normalized != nil || updated.Baseline != nil || updated.Result.Text("duplicate_of") != "" || updated.IssueCount != 3 {
+		t.Fatalf("expected corrected summary and three warnings, got %+v", updated)
+	}
+	hasIssues := true
+	page, err := upgraded.ListResults(ctx, Pagination{Page: 1, Size: 25}, ResultFilter{HasIssues: &hasIssues})
+	if err != nil || page.Total != 2 {
+		t.Fatalf("expected two indexed results with warnings, got %+v, %v", page, err)
+	}
+}

@@ -7,6 +7,9 @@ import (
 )
 
 func (s *Server) comparableGroups(w http.ResponseWriter, r *http.Request) {
+	if _, ok := requestQuery(w, r); !ok {
+		return
+	}
 	candidates, err := s.store.GroupCandidates(r.Context())
 	if err != nil {
 		s.storeError(w, r, err)

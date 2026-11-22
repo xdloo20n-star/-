@@ -134,6 +134,9 @@ func (c GroupCandidates) Groups() []ComparableGroup {
 
 func groupFingerprint(detail ResultDetail) (groupKey, bool) {
 	result := detail.Result
+	if CutoffConflict(result) || RawValueConflict(result) {
+		return groupKey{}, false
+	}
 	unit, _ := normalizationUnit(result)
 	cutoff := result.Text("metric_k_applicability")
 	switch cutoff {

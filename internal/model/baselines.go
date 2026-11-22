@@ -1,8 +1,6 @@
 package model
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"strings"
 )
 
@@ -24,15 +22,8 @@ func (data *DocumentData) RefreshBaselines() {
 	for i := range data.Results {
 		row := &data.Results[i]
 		results[row.Result.Text("result_id")] = row
-		row.IssueCount = 0
 	}
-	sources := make(map[string][]string)
-	for _, item := range data.Evidence {
-		if item.Text("entity_type") == "result" {
-			id := item.Text("entity_id")
-			sources[id] = append(sources[id], item.Text("evidence_id"))
-		}
-	}
+	sources := resultEvidenceIDs(data.Evidence)
 	datasets := recordsByID(data.Datasets, "dataset_id")
 	tasks := recordsByID(data.Tasks, "task_id")
 	experiments := recordsByID(data.Experiments, "experiment_id")
@@ -72,8 +63,7 @@ func (data *DocumentData) RefreshBaselines() {
 		evidenceIDs = append(evidenceIDs, sources[baselineID]...)
 		issueID := previousIDs[id]
 		if issueID == "" {
-			sum := sha256.Sum256([]byte(id + "\x00" + baselineUnavailable))
-			issueID = "issue_" + hex.EncodeToString(sum[:16])
+			issueID = resultIssueID(id, baselineUnavailable)
 		}
 		issues = append(issues, Issue{
 			ID: issueID, CheckName: baselineUnavailable, Severity: "warning",
@@ -82,13 +72,7 @@ func (data *DocumentData) RefreshBaselines() {
 		})
 	}
 	data.Issues = issues
-	for _, issue := range issues {
-		for _, id := range issue.ResultIDs {
-			if row := results[id]; row != nil {
-				row.IssueCount++
-			}
-		}
-	}
+	data.countResultIssues()
 }
 
 func baselineUnavailableMessage(result, baseline Record, criteria []Criterion) string {

@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"mime"
@@ -14,13 +16,26 @@ import (
 	"time"
 
 	"sverka/internal/model"
+	"sverka/internal/store"
 )
 
 const multipartOverhead = 64 << 10
 
-var corpusFilename = regexp.MustCompile(`^([DP][0-9]{3})\.pdf$`)
+var corpusIDPattern = regexp.MustCompile(`^[DP][0-9]{3}$`)
 
 func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request) {
+	query, ok := requestQuery(w, r)
+	if !ok {
+		return
+	}
+	var reuse bool
+	if values, present := query["reuse"]; present {
+		if len(values) != 1 || (values[0] != "true" && values[0] != "false") {
+			badQuery(w, errors.New("reuse должен быть true или false"))
+			return
+		}
+		reuse = values[0] == "true"
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, s.maxPDFBytes+multipartOverhead)
 	parts, err := r.MultipartReader()
 	if err != nil {
@@ -37,6 +52,12 @@ func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request) {
 		invalidUpload(w, nil)
 		return
 	}
+	corpusID, pdfSuffix := strings.CutSuffix(filename, ".pdf")
+	isCorpus := pdfSuffix && corpusIDPattern.MatchString(corpusID)
+	if reuse && !isCorpus {
+		badQuery(w, errors.New("reuse=true требует PDF с именем корпуса, например D001.pdf"))
+		return
+	}
 	var signature [5]byte
 	if _, err := io.ReadFull(part, signature[:]); err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		invalidUpload(w, err)
@@ -47,28 +68,26 @@ func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id := "doc_" + strings.ToLower(rand.Text())
-	filePath := s.pdfPath(id)
-	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	file, err := os.CreateTemp(s.pdfDir, uploadTempPrefix)
 	if err != nil {
 		s.storeError(w, r, err)
 		return
 	}
-	queued := false
 	defer func() {
 		_ = file.Close()
-		if !queued {
-			if err := os.Remove(filePath); err != nil && !errors.Is(err, os.ErrNotExist) {
-				s.log.Error("remove incomplete upload", "document_id", id, "error", err)
-			}
-		}
+		s.removeUpload(file.Name())
 	}()
-	if _, err := file.Write(signature[:]); err != nil {
+	digest := sha256.New()
+	var target io.Writer = file
+	if reuse {
+		target = io.MultiWriter(file, digest)
+	}
+	if _, err := target.Write(signature[:]); err != nil {
 		s.storeError(w, r, err)
 		return
 	}
 	remaining := s.maxPDFBytes - int64(len(signature))
-	written, err := io.Copy(file, io.LimitReader(part, remaining+1))
+	written, err := io.Copy(target, io.LimitReader(part, remaining+1))
 	if written > remaining {
 		uploadTooLarge(w)
 		return
@@ -86,36 +105,83 @@ func (s *Server) uploadDocument(w http.ResponseWriter, r *http.Request) {
 		invalidUpload(w, err)
 		return
 	}
-	if err := file.Sync(); err != nil {
-		s.storeError(w, r, err)
-		return
-	}
-	if err := file.Close(); err != nil {
-		s.storeError(w, r, err)
-		return
-	}
-
+	id := "doc_" + strings.ToLower(rand.Text())
 	doc := model.Document{
 		ID: id, OriginalFilename: filename, Status: model.Queued, ExtractionMode: s.mode,
 		FileURL:    "/api/v1/documents/" + id + "/file",
 		UploadedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000000000Z"),
 	}
-	if match := corpusFilename.FindStringSubmatch(filename); match != nil {
-		doc.CorpusID = &match[1]
+	if isCorpus {
+		doc.CorpusID = &corpusID
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 	defer cancel()
-	if err := s.store.Enqueue(ctx, doc); err != nil {
+	var sha256Hex string
+	if reuse {
+		sha256Hex = hex.EncodeToString(digest.Sum(nil))
+	}
+	doc, queued, err := s.queueUpload(ctx, doc, file, sha256Hex)
+	var conflict reuseConflict
+	if errors.As(err, &conflict) {
+		problem(w, http.StatusConflict, "reuse_conflict", conflict.Error())
+		return
+	}
+	if err != nil {
 		s.storeError(w, r, err)
 		return
 	}
-	queued = true
-	select {
-	case s.wake <- struct{}{}:
-	default:
+	if queued {
+		select {
+		case s.wake <- struct{}{}:
+		default:
+		}
 	}
-	w.Header().Set("Location", "/api/v1/documents/"+id)
+	w.Header().Set("Location", "/api/v1/documents/"+doc.ID)
 	writeJSON(w, http.StatusAccepted, doc)
+}
+
+type reuseConflict string
+
+func (e reuseConflict) Error() string { return string(e) }
+
+func (s *Server) queueUpload(ctx context.Context, doc model.Document, file *os.File, sha256Hex string) (model.Document, bool, error) {
+	if doc.CorpusID != nil {
+		s.corpusUploads.Lock()
+		defer s.corpusUploads.Unlock()
+	}
+	if sha256Hex != "" {
+		matches, err := s.store.ListDocuments(ctx, store.Pagination{Page: 1, Size: 1}, *doc.CorpusID)
+		if err != nil {
+			return model.Document{}, false, err
+		}
+		if matches.Total > 1 {
+			return model.Document{}, false, reuseConflict("Для этого ID корпуса найдено несколько заданий.")
+		}
+		if matches.Total == 1 {
+			existing := matches.Items[0]
+			if existing.ExtractionMode != doc.ExtractionMode {
+				return model.Document{}, false, reuseConflict("Режим извлечения существующего задания отличается.")
+			}
+			existingDigest, err := s.pdfSHA256(existing.ID)
+			if errors.Is(err, os.ErrNotExist) {
+				return model.Document{}, false, reuseConflict("Исходный PDF существующего задания не найден.")
+			}
+			if err != nil {
+				return model.Document{}, false, err
+			}
+			if existingDigest != sha256Hex {
+				return model.Document{}, false, reuseConflict("Содержимое PDF существующего задания отличается.")
+			}
+			return existing, false, nil
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return model.Document{}, false, err
+	}
+	if err := s.publishUpload(ctx, doc, file); err != nil {
+		return model.Document{}, false, err
+	}
+	return doc, true, nil
 }
 
 func invalidUpload(w http.ResponseWriter, err error) {
@@ -132,17 +198,29 @@ func uploadTooLarge(w http.ResponseWriter) {
 }
 
 func (s *Server) listDocuments(w http.ResponseWriter, r *http.Request) {
-	page, err := pagination(r.URL.Query())
+	query, ok := requestQuery(w, r)
+	if !ok {
+		return
+	}
+	page, err := pagination(query)
 	if err != nil {
 		badQuery(w, err)
 		return
 	}
-	result, err := s.store.ListDocuments(r.Context(), page)
+	corpusID := query.Get("corpus_id")
+	if values, present := query["corpus_id"]; present && (len(values) != 1 || !corpusIDPattern.MatchString(corpusID)) {
+		badQuery(w, errors.New("некорректный идентификатор corpus_id"))
+		return
+	}
+	result, err := s.store.ListDocuments(r.Context(), page, corpusID)
 	if err != nil {
 		s.storeError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, http.StatusOK, struct {
+		store.Page[model.Document]
+		CorpusID string `json:"corpus_id,omitempty"`
+	}{Page: result, CorpusID: corpusID})
 }
 
 func (s *Server) document(w http.ResponseWriter, r *http.Request) {

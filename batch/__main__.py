@@ -1,10 +1,10 @@
 """Submit and resume Sverka corpus jobs, or convert a saved Go export."""
 
 import argparse
+import hashlib
 import math
 import sys
 import time
-from collections import defaultdict
 from pathlib import Path
 
 from .api import APIError, SverkaAPI
@@ -21,9 +21,6 @@ from .submission import (
     status_error,
     write_submission,
 )
-
-
-ACTIVE = ("queued", "processing")
 
 
 def progress(message):
@@ -46,7 +43,7 @@ def parser():
     run = subcommands.add_parser("run", help="submit a directory of corpus PDFs")
     run.add_argument("pdf_dir", type=Path)
     run.add_argument("--resume", action="store_true",
-                     help="reuse unique jobs by corpus ID and upload PDFs without a job")
+                     help="reuse jobs with matching PDFs and safely upload PDFs without a job")
     resume = subcommands.add_parser("resume", help="wait for existing jobs by corpus ID without uploading")
     resume.add_argument("corpus_ids", nargs="+", metavar="CORPUS_ID")
     convert = subcommands.add_parser("convert", help="convert a saved Go export or single DocumentDetail offline")
@@ -62,7 +59,7 @@ def parser():
         command.add_argument("--document-id", action="append", default=[], metavar="CORPUS_ID=DOCUMENT_ID",
                              help="pick an exact server job for an input (repeatable)")
         command.add_argument("--timeout", type=duration, default=3600,
-                             help="seconds to wait after uploading (default 3600)")
+                             help="seconds per job selection or post-upload wait (default 3600)")
         command.add_argument("--request-timeout", type=duration, default=30,
                              help="HTTP request timeout in seconds (default 30)")
         command.add_argument("--poll-interval", type=duration, default=2,
@@ -70,7 +67,7 @@ def parser():
     return root
 
 
-def requested_jobs(api, corpus_ids, pins, *, discover, require_existing):
+def requested_jobs(api, corpus_ids, pins, *, discover, require_existing, deadline):
     selected = {}
     for pin in pins:
         corpus_id, _, document_id = pin.partition("=")
@@ -81,24 +78,46 @@ def requested_jobs(api, corpus_ids, pins, *, discover, require_existing):
         selected[corpus_id] = document_id
 
     errors = []
-    to_find = set(corpus_ids) - selected.keys()
-    if discover and to_find:
-        candidates = defaultdict(set)
-        for document in api.documents():
-            corpus_id, document_id = document.get("corpus_id"), document.get("document_id")
-            if isinstance(corpus_id, str) and corpus_id in to_find:
+    if discover:
+        for corpus_id in sorted(set(corpus_ids) - selected.keys()):
+            matches = set()
+            for document in api.documents(corpus_id, deadline=deadline):
+                if document.get("corpus_id") != corpus_id:
+                    raise APIError(f"{corpus_id}: GET /documents returned a different corpus_id")
+                document_id = document.get("document_id")
                 if not isinstance(document_id, str) or not DOCUMENT_ID.fullmatch(document_id):
                     raise APIError(f"{corpus_id}: invalid or missing document_id in GET /documents")
-                candidates[corpus_id].add(document_id)
-        for corpus_id in sorted(to_find):
-            matches = sorted(candidates[corpus_id])
+                if document_id in matches:
+                    raise APIError(f"{corpus_id}: GET /documents repeated {document_id} across pages. Run again.")
+                matches.add(document_id)
             if len(matches) == 1:
-                selected[corpus_id] = matches[0]
+                selected[corpus_id] = next(iter(matches))
             elif matches:
-                errors.append(f"{corpus_id}: multiple jobs ({', '.join(matches)}). Select one with --document-id.")
+                errors.append(f"{corpus_id}: multiple jobs ({', '.join(sorted(matches))}). "
+                              "Select one with --document-id.")
             elif require_existing:
                 errors.append(f"{corpus_id}: missing document in the API")
     return selected, errors
+
+
+def check_digests(api, inputs, selected, *, deadline):
+    errors = []
+    for corpus_id in sorted(inputs.keys() & selected.keys()):
+        document_id = selected[corpus_id]
+        pdf = inputs[corpus_id]
+        try:
+            server_digest = api.digest(document_id, deadline=deadline)
+            local_digest = hashlib.sha256()
+            with pdf.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    if time.monotonic() >= deadline:
+                        raise ValueError(f"timed out checking SHA-256 of {pdf.name}")
+                    local_digest.update(chunk)
+            if local_digest.hexdigest() != server_digest:
+                raise ValueError(f"SHA-256 mismatch for {pdf.name}. Use the matching PDF or select a matching job.")
+        except (APIError, OSError, ValueError) as exc:
+            errors.append(f"{corpus_id} ({document_id}): {exc}")
+    return errors
 
 
 def observe(states, corpus_id, document, document_id=None):
@@ -119,21 +138,24 @@ def observe(states, corpus_id, document, document_id=None):
         raise ValueError(status_error(document))
 
 
-def collect_jobs(api, selected, states, complete, *, deadline=None):
+def collect_jobs(api, selected, states, complete, *, deadline):
     errors = []
     for corpus_id, document_id in sorted(selected.items()):
         if corpus_id in complete:
             continue
-        remaining = deadline - time.monotonic() if deadline is not None else None
-        if remaining is not None and remaining <= 0:
+        if time.monotonic() >= deadline:
             break
         try:
-            detail = api.detail(document_id, timeout=remaining)
+            detail = api.detail(document_id, deadline=deadline)
+            if time.monotonic() >= deadline:
+                break
             document = document_metadata(detail)
             observe(states, corpus_id, document, document_id)
             if document["status"] == "completed":
                 if not isinstance(detail.get("data"), dict):
                     raise ValueError("completed job is missing data")
+                if time.monotonic() >= deadline:
+                    break
                 complete[corpus_id] = detail
         except (APIError, ValueError) as exc:
             label = f"{corpus_id} ({document_id})"
@@ -142,24 +164,22 @@ def collect_jobs(api, selected, states, complete, *, deadline=None):
     return errors
 
 
-def wait_for_jobs(api, selected, states, complete, args):
-    deadline = time.monotonic() + args.timeout
-    while len(complete) < len(selected):
+def wait_for_jobs(api, selected, states, complete, args, *, deadline):
+    while True:
         errors = collect_jobs(api, selected, states, complete, deadline=deadline)
         errors.extend(mode_errors(states.values()))
-        if len(complete) == len(selected) and not errors:
-            return
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            pending = [
+            errors.append(f"Timed out waiting for jobs after {args.timeout:g}s.")
+            errors.extend(
                 f"{corpus_id} ({document_id}): last status={states.get(corpus_id, {}).get('status', 'unknown')}"
                 for corpus_id, document_id in sorted(selected.items())
-                if states.get(corpus_id, {}).get("status") in ACTIVE or corpus_id not in states
-            ]
-            if pending:
-                errors.extend([f"Timed out waiting for jobs after {args.timeout:g}s.", *pending])
+                if corpus_id not in complete
+            )
         if errors:
             raise ValueError("\n".join(errors))
+        if len(complete) == len(selected):
+            return
         time.sleep(min(args.poll_interval, remaining))
 
 
@@ -169,23 +189,24 @@ def run_batch(args, inputs, corpus_ids):
     if (len(set(corpus_ids)) != len(corpus_ids)
             or any(not CORPUS_ID.fullmatch(corpus_id) for corpus_id in corpus_ids)):
         raise ValueError("pass distinct corpus IDs such as D001 or P090")
+    deadline = time.monotonic() + args.timeout
     selected, errors = requested_jobs(api, corpus_ids, args.document_id,
-                                      discover=resume_only or args.resume, require_existing=resume_only)
+                                      discover=resume_only or args.resume, require_existing=resume_only,
+                                      deadline=deadline)
     states, complete = {}, {}
     uploads = inputs.keys() - selected.keys()
+    errors.extend(check_digests(api, inputs, selected, deadline=deadline))
     if errors or uploads:
-        preflight_deadline = time.monotonic() + args.timeout
-        errors.extend(collect_jobs(api, selected, states, complete, deadline=preflight_deadline))
+        errors.extend(collect_jobs(api, selected, states, complete, deadline=deadline))
         errors.extend(mode_errors(states.values()))
-        if not errors:
-            errors.extend(f"{corpus_id} ({selected[corpus_id]}): timed out checking job status before upload"
-                          for corpus_id in sorted(selected.keys() - states.keys()))
+        if uploads and time.monotonic() >= deadline:
+            errors.append(f"Timed out checking jobs before upload after {args.timeout:g}s.")
         if errors:
             raise ValueError("\n".join(errors))
 
     for corpus_id in sorted(uploads):
         try:
-            document = api.upload(inputs[corpus_id])
+            document = api.upload(inputs[corpus_id], reuse=args.resume)
             observe(states, corpus_id, document)
         except (APIError, OSError, ValueError) as exc:
             raise ValueError(f"{corpus_id}: upload failed: {exc}\n"
@@ -195,7 +216,9 @@ def run_batch(args, inputs, corpus_ids):
         if errors:
             raise ValueError("\n".join(errors))
 
-    wait_for_jobs(api, selected, states, complete, args)
+    if uploads:
+        deadline = time.monotonic() + args.timeout
+    wait_for_jobs(api, selected, states, complete, args, deadline=deadline)
     return complete.values()
 
 

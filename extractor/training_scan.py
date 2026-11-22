@@ -40,6 +40,18 @@ ALIGNED_METRICS = (
      ("Miss", "Answer-string retrieval-miss proxy"), ("No search", "No-search rate")),
 )
 Bounds = tuple[float, float, float, float]
+Cell = tuple[str, Bounds]
+Checkpoint = tuple[int, str, str]
+CheckpointCells = dict[Checkpoint, dict[int, Cell]]
+CHECKPOINT_ROWS = (("PPO", "150"), ("PPO", "250"), ("OAS", "150"), ("OAS", "250"))
+CHECKPOINT_CENTERS = ((566, 673, 825, 935), (515, 620, 821, 996))
+# Positions in the 405 dpi right-column region. The row names and both
+# header bands are checked against the OCR before reading individual cells.
+CHECKPOINT_Y = (
+    ((154, 156, 158, 158), (194, 196, 198, 198), (236, 238, 240, 242), (276, 278, 280, 282)),
+    ((442, 443, 445, 446), (483, 484, 486, 486), (522, 524, 526, 528), (566, 567, 569, 570)),
+)
+CHECKPOINT_DECIMAL = re.compile(r"\d{1,2}[.,]\d{3}")
 
 
 def ordered_lines(words: tuple[Word, ...]) -> list[list[Word]]:
@@ -165,9 +177,81 @@ def time_aligned_rows(lines: list[list[Word]]) -> dict[tuple[int, str, str], lis
     return rows
 
 
+def agreed_checkpoint_cells(rows, alternate, extra, bbox) -> CheckpointCells:
+    confirmed = {}
+    for key, cells in rows.items():
+        if key not in alternate:
+            continue
+        matches = {}
+        for col, ((first, word), (second, _)) in enumerate(zip(cells, alternate[key], strict=True)):
+            dotted = first.replace(",", ".")
+            if dotted != second.replace(",", ".") or "." not in first + second:
+                continue
+            if key in extra and extra[key][col][0].replace(",", ".") != dotted:
+                continue
+            matches[col] = (first if "." in first else second, bbox(word.x0, word.y0, word.x1, word.y1))
+        confirmed[key] = matches
+    return confirmed
+
+
+def bounded_checkpoint_cells(first: ScanImage, second: ScanImage, first_words: tuple[Word, ...],
+                             second_words: tuple[Word, ...], confirmed: CheckpointCells,
+                             engine: str, higher_resolution: Callable[[], ScanImage] | None = None) -> CheckpointCells:
+    def local_text(words, image, left, right, y, radius):
+        scale = image.dpi / 405
+        return text(sorted((w for w in words if left * scale < w.x < right * scale
+                            and abs(w.y / scale - y) < radius), key=lambda w: w.x))
+
+    regions = ((first, first_words), (second, second_words))
+    headings = tuple(any(pattern.search(local_text(words, image, 90, 1100, y, 18))
+                         for image, words in regions)
+                     for pattern, y in zip(ALIGNED_HEADERS, (84, 372), strict=True))
+    if not all(headings):
+        return {}
+
+    def read_cell(image, x, y, width, height, white, psm):
+        scale = image.dpi / 405
+        box = tuple(round(value * scale) for value in (x - width, y - height, x + width, y + height))
+        crop = contrast(image.crop(*box), white)
+        words = recognize(crop, engine, psm, digits_only=True)
+        if len(words) != 1 or not CHECKPOINT_DECIMAL.fullmatch(words[0].text):
+            return None
+        word = words[0]
+        return word.text, crop.source_bbox(word.x0, word.y0, word.x1, word.y1)
+
+    found = {}
+    for block, (left, right) in enumerate(((230, 480), (128, 392))):
+        for i, (method, step) in enumerate(CHECKPOINT_ROWS):
+            key = block, method, step
+            ys = CHECKPOINT_Y[block][i]
+            labels = [ALIGNED_ROW.match(local_text(words, image, left, right, ys[0], 18))
+                      for image, words in regions]
+            if not all(label and (label[1].upper(), label[2]) == (method, step) for label in labels):
+                continue
+            for col, (x, y) in enumerate(zip(CHECKPOINT_CENTERS[block], ys, strict=True)):
+                if col in confirmed.get(key, {}):
+                    continue
+                radius = (45, 48, 53, 49)[col]
+                readings = [value for image, white, psm in ((first, 184, 7), (second, 240, 7), (second, 208, 8))
+                            if (value := read_cell(image, x, y, radius, 18, white, psm)) is not None]
+                dotted = None
+                if len(readings) >= 2 and len({raw.replace(",", ".") for raw, _ in readings}) == 1:
+                    dotted = next(((raw, box) for raw, box in readings if "." in raw), None)
+                elif higher_resolution is not None:
+                    candidate = read_cell(first, x, y, radius + 1, 17, 240, 7)
+                    if candidate is not None and "." in candidate[0]:
+                        rescanned = read_cell(higher_resolution(), x, y, radius, 18, 184, 7)
+                        if rescanned is not None and rescanned[0] == candidate[0]:
+                            dotted = rescanned
+                if dotted is not None:
+                    found.setdefault(key, {})[col] = dotted
+    return found
+
+
 def time_aligned_tables(page: Page, pages: list[Page], words: tuple[Word, ...], alternate_words: tuple[Word, ...],
                         bbox: Callable[[float, float, float, float], Bounds],
-                        extra_words: tuple[Word, ...] = ()) -> list[Table]:
+                        extra_words: tuple[Word, ...] = (), *,
+                        read_missing: Callable[[CheckpointCells], CheckpointCells] | None = None) -> list[Table]:
     lines = ordered_lines(words)
     caption = ALIGNED_CAPTION.search(" ".join(text(line) for line in lines))
     if not caption:
@@ -187,25 +271,19 @@ def time_aligned_tables(page: Page, pages: list[Page], words: tuple[Word, ...], 
     if any(full_model.search(p.prose) for p in pages):
         model += "-Instruct"
 
-    rows = time_aligned_rows(lines)
-    alternate = time_aligned_rows(ordered_lines(alternate_words))
-    extra = time_aligned_rows(ordered_lines(extra_words))
+    confirmed = agreed_checkpoint_cells(time_aligned_rows(lines), time_aligned_rows(ordered_lines(alternate_words)),
+                                        time_aligned_rows(ordered_lines(extra_words)), bbox)
+    supplemental = read_missing(confirmed) if read_missing is not None else {}
     tables = []
-    for index, (key, values_in_row) in enumerate(rows.items()):
-        if key not in alternate:
-            continue
+    for index, key in enumerate(dict.fromkeys((*confirmed, *supplemental))):
         block, method, step = key
+        cells = {**supplemental.get(key, {}), **confirmed.get(key, {})}
         values, columns, boxes = [], [], []
-        for col, ((first, word), (second, _), (printed, metric)) in enumerate(zip(
-            values_in_row, alternate[key], ALIGNED_METRICS[block], strict=True,
-        )):
-            if first.replace(",", ".") != second.replace(",", ".") or "." not in first + second:
-                continue
-            if key in extra and extra[key][col][0].replace(",", ".") != first.replace(",", "."):
-                continue
-            values.append(first if "." in first else second)
-            boxes.append(bbox(word.x0, word.y0, word.x1, word.y1))
-            columns.append(Column(Header(printed, metric, word.x, None, None), dataset,
+        for col, (raw, box) in sorted(cells.items()):
+            printed, metric = ALIGNED_METRICS[block][col]
+            values.append(raw)
+            boxes.append(box)
+            columns.append(Column(Header(printed, metric, 0, None, None), dataset,
                                   aggregation="single controlled trajectory", generator=model,
                                   aggregation_evidence=(protocol, trajectory.search(protocol.prose)[0]),
                                   metric_variant=f"step {step}", source_label=printed))
@@ -222,8 +300,22 @@ def read_time_aligned(page: Page, pages: list[Page]) -> list[Table]:
     engine = page.scan.engine
     first = deskew(scan_region(page.scan, bounds, dpi=495))
     second = deskew(scan_region(page.scan, bounds, dpi=405))
-    return time_aligned_tables(page, pages, recognize(contrast(first, 203), engine),
-                               recognize(second, engine), first.source_bbox, recognize(contrast(second, 203), engine))
+    primary = recognize(contrast(first, 203), engine)
+    alternate = recognize(second, engine)
+    extra = recognize(contrast(second, 203), engine)
+    high_resolution = None
+
+    def read_high_resolution():
+        nonlocal high_resolution
+        if high_resolution is None:
+            high_resolution = deskew(scan_region(page.scan, bounds, dpi=660))
+        return high_resolution
+
+    def read_missing(confirmed):
+        return bounded_checkpoint_cells(second, first, alternate, primary, confirmed, engine, read_high_resolution)
+
+    return time_aligned_tables(page, pages, primary, alternate, first.source_bbox, extra,
+                               read_missing=read_missing)
 
 
 def read_training_scan_tables(pages: list[Page], tables: list[Table]) -> list[Table]:

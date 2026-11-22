@@ -2,6 +2,7 @@
 
 const API = "/api/v1";
 const POLL_INTERVAL = 1600;
+const DOCUMENT_STATUS_RETRIES = 3;
 const SELECTION_KEY = "sverka.comparison.v1";
 const UNKNOWN = "не указано";
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
@@ -91,13 +92,16 @@ async function request(path, options = {}) {
     });
   } catch (error) {
     if (error.name === "AbortError") throw error;
-    throw new Error("Не удалось связаться с сервером. Проверьте соединение.");
+    throw Object.assign(new Error("Не удалось связаться с сервером. Проверьте соединение."), { retryable: true });
   }
   const payload = await response.json().catch((error) => {
     if (error.name === "AbortError") throw error;
     return null;
   });
-  if (!response.ok) throw new Error(payload?.error?.message || `Сервер вернул ошибку ${response.status}.`);
+  if (!response.ok) {
+    const message = payload?.error?.message || `Сервер вернул ошибку ${response.status}.`;
+    throw Object.assign(new Error(message), { retryable: response.status >= 500 });
+  }
   if (!payload) throw new Error("Сервер вернул ответ без данных.");
   return payload;
 }
@@ -425,13 +429,18 @@ function showDocument(screen, params) {
 
   let timer;
   let lastStatus;
+  let statusFailures = 0;
   screen.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
 
   async function load(showLoading = false) {
-    if (showLoading) body.replaceChildren(statePanel("Получаем статус…", null, null, "loading"));
+    if (showLoading) {
+      statusFailures = 0;
+      body.replaceChildren(statePanel("Получаем статус…", null, null, "loading"));
+    }
     try {
       const { document: doc, data } = await request(endpoint("documents", id), { signal: screen.signal });
       if (screen.signal.aborted) return;
+      statusFailures = 0;
       if (follow && doc.status === "completed" && data?.publication?.in_scope === true) {
         location.replace(resultsRoute({ document_id: id }));
         return;
@@ -460,7 +469,13 @@ function showDocument(screen, params) {
       }
       if (ACTIVE_STATUSES.has(doc.status)) timer = setTimeout(load, POLL_INTERVAL);
     } catch (error) {
-      if (!screen.signal.aborted) loadFailure(body, "Не удалось получить статус", error, () => load(true));
+      if (screen.signal.aborted) return;
+      if ((follow || ACTIVE_STATUSES.has(lastStatus)) && error.retryable && statusFailures < DOCUMENT_STATUS_RETRIES) {
+        statusFailures += 1;
+        timer = setTimeout(load, POLL_INTERVAL * statusFailures);
+        return;
+      }
+      loadFailure(body, "Не удалось получить статус", error, () => load(true));
     }
   }
 
@@ -489,7 +504,7 @@ function filterInput(name, label, filters, placeholder, type = "text") {
   return element("label", "filter-field", element("span", "", label), input);
 }
 
-function renderFilters(filters, reload) {
+function renderFilters(filters, resetHref, reload) {
   const issues = element("select", "");
   issues.name = "has_issues";
   for (const [value, title] of [["", "Все"], ["true", "Есть замечания"], ["false", "Без замечаний"]]) {
@@ -499,7 +514,7 @@ function renderFilters(filters, reload) {
 
   const submit = element("button", "button button-primary", "Применить");
   submit.type = "submit";
-  const reset = filters.size ? link("Сбросить", "#results", "text-link filter-reset") : null;
+  const reset = resetHref ? link("Сбросить", resetHref, "text-link filter-reset") : null;
   const form = element("form", "panel filters",
     element("div", "filter-main", filterInput("q", "Поиск", filters, "Статья, датасет", "search"),
       filterInput("metric_name", "Метрика", filters, "Recall@5"),
@@ -525,6 +540,8 @@ function showResults(screen, params) {
   const filters = resultFilters(params);
   const page = pageNumber(params);
   const id = filters.get("document_id");
+  const reset = resultsRoute(id ? { document_id: id } : {});
+  const hasResultFilters = filters.size > (id ? 1 : 0);
   const from = resultsRoute(filters, page);
   const scope = element("div", "document-scope");
   const count = element("span", "section-count");
@@ -533,7 +550,7 @@ function showResults(screen, params) {
   const section = element("section", "workspace-section", sectionHeading("Извлечённые результаты", count), list);
   WORKSPACE.append(heading);
   if (id) WORKSPACE.append(scope);
-  WORKSPACE.append(renderFilters(filters, load), section);
+  WORKSPACE.append(renderFilters(filters, hasResultFilters ? reset : null, load), section);
 
   let loading = false;
   async function load() {
@@ -548,12 +565,11 @@ function showResults(screen, params) {
       if (screen.signal.aborted) return;
       count.textContent = totalLabel(data.total, ["результат", "результата", "результатов"]);
       if (data.items.length) {
-        list.replaceChildren(resultTable(data.items, from));
+        list.replaceChildren(resultTable(data.items, from, filters));
       } else if (data.total > 0) {
         list.replaceChildren(statePanel("На этой странице нет результатов", null,
           link("К первой странице", resultsRoute(filters), "button button-secondary")));
-      } else if ([...filters.keys()].some((key) => key !== "document_id")) {
-        const reset = id ? resultsRoute({ document_id: id }) : "#results";
+      } else if (hasResultFilters) {
         list.replaceChildren(statePanel("По фильтрам ничего не найдено", "Измените запрос или сбросьте фильтры.",
           link("Сбросить фильтры", reset, "button button-secondary")));
       } else if (id) {
@@ -581,7 +597,8 @@ function showResults(screen, params) {
         element("div", "scope-identity", element("span", "field-label", "Документ"),
           link(doc.original_filename, documentRoute(id), "document-name"),
           data?.publication?.title ? element("p", "muted", data.publication.title) : null),
-        element("div", "action-group", statusBadge(doc.status), mockBadge(doc.extraction_mode), documentExport(id)),
+        element("div", "action-group", statusBadge(doc.status), mockBadge(doc.extraction_mode),
+          documentExport(id), link("Все результаты", "#results", "text-link")),
       ), ...documentMessages(data));
       if (doc.failure) scope.append(element("div", "callout callout-error", doc.failure.message));
     } catch (error) {
@@ -658,7 +675,14 @@ function tableCell(label, ...content) {
   return cell;
 }
 
-function resultTable(items, from) {
+function resultFilterLink(name, id, field, filters) {
+  if (!name || !id || filters.get(field) === id) return valueOrUnknown(name);
+  const next = new URLSearchParams(filters);
+  next.set(field, id);
+  return link(name, resultsRoute(next), "text-link");
+}
+
+function resultTable(items, from, filters) {
   const labels = ["Выбор", "Метрика", "Конфигурация", "Датасет", "В статье", "Нормализовано", "Замечания"];
   const header = element("tr", "", ...labels.map((label) => {
     const cell = element("th", "", label);
@@ -683,8 +707,8 @@ function resultTable(items, from) {
         link(result.metric_name, resultRoute(result.result_id, from), "metric-link"),
         result.metric_variant ? element("span", "value-note", result.metric_variant) : null,
         mockBadge(row.extraction_mode), source)),
-      tableCell(labels[2], valueOrUnknown(row.configuration_name)),
-      tableCell(labels[3], valueOrUnknown(row.dataset_name)),
+      tableCell(labels[2], resultFilterLink(row.configuration_name, result.config_id, "config_id", filters)),
+      tableCell(labels[3], resultFilterLink(row.dataset_name, result.dataset_id, "dataset_id", filters)),
       tableCell(labels[4], rawCell(result)),
       tableCell(labels[5], row.normalized ? element("span", "mono normalized-value", measured(row.normalized)) : element("span", "muted", UNKNOWN)),
       tableCell(labels[6], issueCount(row.issue_count, resultRoute(result.result_id, from, "issues"))),

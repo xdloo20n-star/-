@@ -72,6 +72,11 @@ LANGUAGES = "De Es Zh Ar"
 UNSIGNED = re.compile(r"\d+")
 PERCENT_VALUE = re.compile(r"(?:100(?:\.0+)?|[0-9]{1,2}(?:\.\d+)?)")
 RECALL_HEADER = re.compile(r"Recall@(\d+)")
+REGEN_TRAINING_PREFIX = re.compile(r"Training metrics for the outcome filter main\b", re.I)
+REGEN_TRAINING_CAPTION = re.compile(
+    r"Training metrics for the outcome filter main set vs\. the regen-augmented set "
+    r"under identical DPO hyperparameters \(β\s*=\s*\d+(?:\.\d+)?\)\.", re.I,
+)
 
 
 def words_text(words: list[Word]) -> str:
@@ -146,6 +151,8 @@ def read_native_benchmark_tables(pages: list[Page], known: list[Table]) -> list[
                     parsed = japanese_question_types(page, label, rows, anchor)
                 if RECALL_PREFIX.match(text) and (anchor := positioned_caption(rows, label, RECALL_PREFIX)):
                     parsed = recall_tables(page, label, rows, anchor)
+                if REGEN_TRAINING_PREFIX.match(text) and (anchor := positioned_caption(rows, label, REGEN_TRAINING_PREFIX)):
+                    parsed = regen_training_tables(page, label, rows, anchor)
                 if ABLATION_CAPTION.match(text) and (anchor := positioned_caption(rows, label, ABLATION_CAPTION)):
                     setup = source_statement([candidate for candidate in pages if candidate.number < page.number],
                                              FINAL_GENERATOR)
@@ -157,6 +164,42 @@ def read_native_benchmark_tables(pages: list[Page], known: list[Table]) -> list[
                     tables.extend(parsed)
                     occupied.add(key)
     return tables
+
+
+def regen_training_tables(page: Page, label: str, rows: list[list[Word]], anchor: Word) -> list[Table]:
+    # The caption sits above the compact right-column grid.
+    section = [cells for row in rows if (cells := [word for word in row
+               if anchor.x0 - 4 < word.x0 and anchor.y - 3 < word.y < anchor.y + 85])]
+    headers = [i for i, row in enumerate(section) if words_text(row) == "Variant Loss Margin Acc"]
+    if len(headers) != 1:
+        return []
+    index = headers[0]
+    caption = REGEN_TRAINING_CAPTION.search(" ".join(words_text(row) for row in section[:index]))
+    if caption is None or len(section) != index + 3:
+        return []
+
+    headings = section[index][1:]
+    centers = [word.x for word in headings]
+    metric_names = ("DPO loss", "Preference margin", "Preference accuracy")
+    units = (None, None, "%")
+    directions = ("lower_is_better", "higher_is_better", "higher_is_better")
+    columns = [Column(Header(heading.text, name, heading.x, None, unit), None,
+                      source_label=heading.text, direction=direction)
+               for heading, name, unit, direction in zip(headings, metric_names, units, directions, strict=True)]
+    results = []
+    expected = (("outcome filter main", "outcome filter main"), ("+ regen", "outcome filter + regen"))
+    for row, (printed, config) in zip(section[index + 1:], expected, strict=True):
+        cells = row[-3:]
+        if words_text(row[:-3]) != printed or not aligned(cells, centers, 6):
+            return []
+        loss, margin, accuracy = (word.text for word in cells)
+        if (not all(re.fullmatch(r"\d+\.\d+", raw) for raw in (loss, margin))
+                or not accuracy.endswith("%") or not PERCENT_VALUE.fullmatch(accuracy[:-1])):
+            return []
+        results.append(Table(page, label, f"{label}: {caption[0]}", int(cells[0].y), columns,
+                             [(printed, [loss, margin, accuracy])], config_name=config,
+                             value_bboxes=normalized_boxes(page, cells)))
+    return results
 
 
 def xrag_counts(page: Page, label: str, rows: list[list[Word]], footer: Word) -> list[Table]:

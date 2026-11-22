@@ -209,6 +209,37 @@ def find(payload, table, row, column):
 
 
 class NativeBenchmarkTableTest(unittest.TestCase):
+    def test_regeneration_training_metrics_use_the_reported_rows_and_units(self):
+        # PRO-STEP, PDF page 20, right-column Table 22. Text on the left
+        # column shares the y positions of the heading and both data rows.
+        caption = "Table 22: Training metrics for the outcome filter main"
+        rows = [
+            (342.86, tuple(zip((316.97, 337.07, 363.9, 398.58, 421.89, 436.47, 462.59, 492.11, 514.29),
+                               caption.split(), strict=True))),
+            (354.82, tuple(zip((311.79, 326.48, 341.74, 386.42, 430.53, 451, 483.34, 514.26),
+                               "set vs. the regen-augmented set under identical DPO".split(), strict=True))),
+            (366.77, ((339.32, "hyperparameters"), (379.46, "(β"), (391.10, "="), (407.01, "0.1)."))),
+            (391.79, ((180, "text"), (320.68, "Variant"), (413.55, "Loss"), (465.14, "Margin"), (516.20, "Acc"))),
+            (407.34, ((163, "8"), (321.59, "outcome"), (347.74, "filter"), (367.41, "main"),
+                      (413.56, "0.42"), (465.14, "2.17"), (516.21, "81%"))),
+            (417.31, ((168, "9"), (317.64, "+"), (332.30, "regen"),
+                      (413.56, "0.22"), (465.14, "3.48"), (516.21, "91%"))),
+        ]
+        page = fixture_page(20, caption, rows)
+        payload = extract(page)
+        self.assertEqual(len(payload["results"]), 6)
+        loss, config, dataset, source = find(payload, "Table 22", "+ regen", "Loss")
+        self.assertEqual((loss["metric_name"], loss["raw_value"], loss["raw_unit"], config["rag_variant"],
+                          dataset["dataset_name"], source["page"], source["verification"]),
+                         ("DPO loss", "0.22", None, "outcome filter + regen", None, 20, "text_match"))
+        self.assertAlmostEqual((source["bbox"][0] + source["bbox"][2]) / 2, 413.56 / 595.276)
+        self.assertAlmostEqual((source["bbox"][1] + source["bbox"][3]) / 2, 417.31 / 841.89)
+        accuracy, _, _, _ = find(payload, "Table 22", "outcome filter main", "Acc")
+        self.assertEqual((accuracy["metric_name"], accuracy["raw_value"], accuracy["raw_unit"]),
+                         ("Preference accuracy", "81%", "%"))
+        displaced = [(y, tuple((x + 14 if raw == "3.48" else x, raw) for x, raw in line)) for y, line in rows]
+        self.assertEqual(extract(fixture_page(20, caption, displaced))["results"], [])
+
     def test_xrag_counts_resolve_merged_language_headers(self):
         payload = extract(fixture_page(6, XRAG_CAPTION, XRAG_ROWS))
         self.assertEqual(len(payload["results"]), 35)

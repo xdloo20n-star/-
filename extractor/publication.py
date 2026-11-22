@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 from context_recall_tables import read_context_recall_tables
+from coda_tables import read_coda_tables
 
 from benchmark_distribution import read_benchmark_distributions
 
@@ -292,6 +293,7 @@ def extract_publication(pdf: PDF, *, source_path: Path | None = None) -> dict[st
     extracted_tables += read_training_scan_tables(pdf.pages, extracted_tables)
     extracted_tables += read_training_scan_pairs(pdf.pages, extracted_tables)
     extracted_tables += read_context_recall_tables(pdf.pages, extracted_tables)
+    extracted_tables += read_coda_tables(pdf.pages, extracted_tables)
     extracted_tables = read_factuality_tables(pdf.pages, extracted_tables)
     extracted_tables = read_reasoning_tables(pdf.pages, extracted_tables)
     extracted_tables = read_scanned_score_tables(pdf.pages, extracted_tables)

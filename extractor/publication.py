@@ -31,7 +31,9 @@ from scanned_score_tables import read_scanned_score_tables
 from training_scan import read_training_scan_tables
 from training_scan_pairs import read_training_scan_pairs
 from training_tables import read_training_tables
-from vector_scatter import ScatterFigure, read_vector_length_scatter, read_vector_noisy_scatter, read_vector_scatter
+from vector_scatter import (
+    ScatterFigure, read_vector_length_scatter, read_vector_noisy_contours, read_vector_noisy_scatter, read_vector_scatter,
+)
 from watermark_tables import read_watermark_tables
 
 RAG = re.compile(r"\bRAG(?:s)?\b|retrieval[\s-]+augmented\s+generation", re.I)
@@ -316,8 +318,9 @@ def extract_publication(pdf: PDF, *, source_path: Path | None = None) -> dict[st
     for table in audit_summaries:
         add_table(payload, table, question_answering, by_page[table.page.number], duplicate_index)
     if source_path is not None:
+        noisy = read_vector_noisy_scatter(source_path, pdf.pages)
         figures = (read_vector_scatter(source_path, pdf.pages) + read_vector_length_scatter(source_path, pdf.pages)
-                   + read_vector_noisy_scatter(source_path, pdf.pages))
+                   + noisy + read_vector_noisy_contours(source_path, noisy))
         add_scatter_figures(payload, figures)
     return payload.as_dict()
 
@@ -336,22 +339,28 @@ def add_scatter_figures(payload: Payload, figures: tuple[ScatterFigure, ...]) ->
             dataset_id, task_id = datasets[panel.dataset]
             for point_number, point in enumerate(panel.points, start=1):
                 vertical = f"~{point.y:.4f}"
-                is_answer = figure.vertical_metric == "Answer F1"
+                shared_answer = figure.metric is not None and figure.vertical_metric == "Answer F1"
                 # Only the matched precision/recall/F1 series has verified
                 # point identity across multiple figures.
-                series = figure.condition if is_answer else figure.label
+                series = figure.condition if shared_answer else figure.label
                 key = series, panel_number, point_number, panel.dataset, panel.generator, vertical
+                location = f"Panel {panel_number}, point {point_number}."
+                if point.contour is not None:
+                    curve, vertex = point.contour
+                    location = f"Contour {curve}, vertex {vertex}. Knowledge precision ~{point.x:.4f}."
                 if key not in experiments:
                     experiments[key] = (
                         payload.add("configurations", "config_id", "config",
                                     rag_variant=figure.condition, generator_model=panel.generator,
                                     top_k=None),
                         payload.add("experiments", "experiment_id", "experiment", evaluation_protocol=None,
-                                    note=f"Panel {panel_number}, point {point_number}. {figure.condition}"),
+                                    note=f"{location} {figure.condition}"),
                         None,
                     )
                 config_id, experiment_id, canonical = experiments[key]
                 for metric, value in ((figure.metric, point.x), (figure.vertical_metric, point.y)):
+                    if metric is None:
+                        continue
                     raw = f"~{value:.4f}"
                     result_id = payload.add(
                         "results", "result_id", "result", config_id=config_id, dataset_id=dataset_id,
@@ -360,10 +369,10 @@ def add_scatter_figures(payload: Payload, figures: tuple[ScatterFigure, ...]) ->
                         metric_k_applicability="not_applicable", reported_value=float(raw[1:]),
                         reported_scale="fraction", raw_value=raw, raw_unit=None, aggregation=None,
                         result_origin="primary", cited_publication_id=None, extraction_status="extracted",
-                        note=f"Panel {panel_number}, point {point_number}. Calibrated native vector coordinates "
+                        note=f"{location} Calibrated native vector coordinates "
                              "(approximate ±0.0001 fraction).",
                     )
-                    if metric == "Answer F1" and is_answer:
+                    if metric == "Answer F1" and shared_answer:
                         if canonical:
                             payload.results[-1]["duplicate_of"] = canonical
                         else:

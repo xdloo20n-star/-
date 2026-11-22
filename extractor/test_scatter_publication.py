@@ -11,8 +11,8 @@ class ScatterPublicationTest(unittest.TestCase):
         label = f"Figure {number}"
         page = Page(number + 11, f"{label}: Knowledge versus Answer F1.", "text_match")
         positions = [
-            SimpleNamespace(x=.1342, y=first, bbox=(.18, .34, .19, .35)),
-            SimpleNamespace(x=.1342, y=.1992, bbox=(.28, .34, .29, .35)),
+            SimpleNamespace(x=.1342, y=first, bbox=(.18, .34, .19, .35), contour=None),
+            SimpleNamespace(x=.1342, y=.1992, bbox=(.28, .34, .29, .35), contour=None),
         ]
         panel = SimpleNamespace(dataset="WoW", generator="GPT-4o-mini", points=positions)
         return SimpleNamespace(page=page, label=label, metric=metric, panels=(panel,),
@@ -57,6 +57,21 @@ class ScatterPublicationTest(unittest.TestCase):
                          ("Knowledge recall", "~0.1992"))
         self.assertNotIn("duplicate_of", data.results[5])
         self.assertNotEqual(data.results[1]["experiment_id"], data.results[5]["experiment_id"])
+
+    def test_contour_emits_only_answer_f1_with_the_vertex_locator(self):
+        data = Payload(document={}, publication={})
+        figure = self.figure(6, None, .6017, condition="noisy knowledge annotation contours")
+        point = figure.panels[0].points[0]
+        point.contour = (5, 7)
+        figure.panels[0].points = [point]
+        add_scatter_figures(data, [figure])
+        answer, = data.results
+        source, = data.evidence
+        self.assertEqual((answer["metric_name"], answer["raw_value"], answer["reported_scale"], answer["raw_unit"]),
+                         ("Answer F1", "~0.6017", "fraction", None))
+        self.assertIn("Contour 5, vertex 7. Knowledge precision ~0.1342.", answer["note"])
+        self.assertNotIn("duplicate_of", answer)
+        self.assertEqual((source["page"], source["figure"], source["bbox"]), (17, "Figure 6", (.18, .34, .19, .35)))
 
 
 if __name__ == "__main__":

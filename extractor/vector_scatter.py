@@ -31,11 +31,16 @@ NOISY_CAPTION = re.compile(
     r"\b(Figure \d+): Scatter plot of answer F1 versus the knowledge precision for ([\w.-]+) on noisy HotpotQA\.",
     re.I,
 )
+NOISY_CONTOUR_CAPTION = re.compile(
+    r"\b(Figure \d+): Color contours of answer F1 versus the knowledge precision for ([\w.-]+) on noisy HotpotQA\. "
+    r"Each contour represents a different knowledge recall score", re.I,
+)
 SVG = "{http://www.w3.org/2000/svg}"
 NUMBER = r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?"
 COORD = re.compile(NUMBER)
 RECTANGLE = re.compile(r"M (?:\S+ \S+ L ){3}\S+ \S+ Z(?: M \S+ \S+)?\s*")
 LINE = re.compile(r"M (\S+) (\S+) L (\S+) (\S+)\s*")
+POLYLINE = re.compile(rf"M {NUMBER} {NUMBER}(?: L {NUMBER} {NUMBER}){{2,}}\s*")
 MATRIX = re.compile(r"matrix\(([^()]*)\)")
 DECIMAL = re.compile(r"\d+\.\d+")
 BLACK = "rgb(0%, 0%, 0%)"
@@ -51,6 +56,7 @@ class ScatterPoint:
     x: float
     y: float
     bbox: tuple[float, float, float, float]
+    contour: tuple[int, int] | None = None
 
 
 PageGeometry = tuple[tuple[ScatterPoint, ...], ...]
@@ -67,7 +73,7 @@ class ScatterPanel:
 class ScatterFigure:
     page: Page
     label: str
-    metric: str
+    metric: str | None
     panels: tuple[ScatterPanel, ...]
     vertical_metric: str = "Answer F1"
     condition: str = "unconstrained knowledge sampling"
@@ -176,37 +182,64 @@ def read_vector_noisy_scatter(path: Path, pages: list[Page]) -> tuple[ScatterFig
     return tuple(figures)
 
 
-def scatter_caption_region(words: tuple[Word, ...], width: float, figure: str) -> Box | None:
+def read_vector_noisy_contours(path: Path, scatter: tuple[ScatterFigure, ...]) -> tuple[ScatterFigure, ...]:
+    figures = []
+    for source in scatter:
+        if len(source.panels) != 1:
+            continue
+        panel, = source.panels
+        caption = NOISY_CONTOUR_CAPTION.search(source.page.prose)
+        if not caption or panel.generator != caption[2]:
+            continue
+        geometry = read_page_geometry(path, source.page, marker_opacity=None, figure=caption[1])
+        if len(geometry) != 1:
+            continue
+        points, = geometry
+        # Verify the horizontal conditions against the independent scatter
+        # plot on this page. Several points can share one precision, so this
+        # check never establishes identity between individual experiments.
+        if any(not any(abs(point.x - other.x) <= TICK_TOLERANCE for other in panel.points) for point in points):
+            continue
+        contour = ScatterPanel(panel.dataset, panel.generator, points)
+        figures.append(ScatterFigure(source.page, caption[1], None, (contour,), "Answer F1",
+                                     "noisy knowledge annotation contours"))
+    return tuple(figures)
+
+
+def scatter_caption_region(words: tuple[Word, ...], width: float, figure: str,
+                           vertical_axis: tuple[str, str]) -> Box | None:
     label, number = figure.split()
-    captions = [first for first, second in zip(words, words[1:]) if
-                (first.text.casefold(), second.text) == (label.casefold(), f"{number}:")
+    captions = [(first, second.text) for first, second in zip(words, words[1:]) if
+                first.text.casefold() == label.casefold() and re.fullmatch(r"\d+:", second.text)
                 and abs(first.y - second.y) < 1 and 0 <= second.x0 - first.x1 < 8]
-    if len(captions) != 1:
+    matching = [first for first, token in captions if token == f"{number}:"]
+    if len(matching) != 1:
         return None
-    caption, = captions
-    region = Box(caption.x0, 0, width, caption.y0)
-    # The caption describes the color outcome. Verify both PDF axis labels
-    # in the panel above it before interpreting the marker coordinates.
+    caption, = matching
+    top = max((other.y1 for other, _ in captions
+               if abs(other.x0 - caption.x0) < 1 and other.y1 < caption.y0), default=0)
+    region = Box(caption.x0, top, width, caption.y0)
+    # Verify both PDF axis labels in this caption's plot region.
     visible = tuple(word for word in words if region.contains(word.x, word.y))
     labels = set()
     for first, second in zip(visible, visible[1:]):
-        if first.text != "Knowledge":
-            continue
-        if (second.text == "Precision" and abs(first.y - second.y) < 1
+        names = first.text, second.text
+        if (names == ("Knowledge", "Precision") and abs(first.y - second.y) < 1
                 and 0 <= second.x0 - first.x1 < 6):
-            labels.add("Precision")
-        if (second.text == "Recall" and abs(first.x - second.x) < 1
+            labels.add("horizontal")
+        if (names == vertical_axis and abs(first.x - second.x) < 1
                 and 0 <= first.y0 - second.y1 < 6):
-            labels.add("Recall")
-    return region if labels == {"Precision", "Recall"} else None
+            labels.add("vertical")
+    return region if labels == {"horizontal", "vertical"} else None
 
 
-def read_page_geometry(path: Path, page: Page, *, marker_opacity: str = "0.5", refine: bool = True,
+def read_page_geometry(path: Path, page: Page, *, marker_opacity: str | None = "0.5", refine: bool = True,
                        figure: str | None = None) -> PageGeometry:
     command = ["pdftocairo", "-f", str(page.number), "-l", str(page.number), "-svg"]
     try:
         words, size = positioned_words(path, page.number)
-        region = scatter_caption_region(words, size[0], figure) if figure else None
+        axis = ("Answer", "F1") if marker_opacity is None else ("Knowledge", "Recall")
+        region = scatter_caption_region(words, size[0], figure, axis) if figure else None
         if figure and region is None:
             return ()
         svg = run([*command, str(path), "-"], timeout=40)
@@ -233,12 +266,12 @@ def read_page_geometry(path: Path, page: Page, *, marker_opacity: str = "0.5", r
     for old_panel, new_panel in zip(ordinary, candidate, strict=True):
         panel = []
         for old, new in zip(old_panel, new_panel, strict=True):
-            if (max(abs(old.x - new.x), abs(old.y - new.y)) > TICK_TOLERANCE
+            if (old.contour != new.contour or max(abs(old.x - new.x), abs(old.y - new.y)) > TICK_TOLERANCE
                     or any(abs(a - b) * dimension > 1
                            for a, b, dimension in zip(old.bbox, new.bbox, bounds, strict=True))):
                 return ordinary
             # Keep the citation in the original PDF page's coordinate space.
-            panel.append(ScatterPoint(new.x, new.y, old.bbox))
+            panel.append(ScatterPoint(new.x, new.y, old.bbox, new.contour))
         refined.append(tuple(panel))
     return tuple(refined)
 
@@ -312,6 +345,29 @@ def scatter_marker(attributes: dict[str, str], opacity: str, scale: float) -> tu
     return x / scale, y / scale, radius
 
 
+def contour_vertices(attributes: dict[str, str], scale: float) -> tuple[tuple[float, float, float], ...]:
+    stroke = attributes.get("stroke", "")
+    if (attributes.get("fill") != "none" or attributes.get("stroke-opacity") != "1"
+            or not stroke.startswith("rgb(") or stroke in (BLACK, WHITE) or "stroke-dasharray" in attributes):
+        return ()
+    path = attributes.get("d", "")
+    transform = matrix(attributes)
+    if not transform or not POLYLINE.fullmatch(path):
+        return ()
+    a, b, c, d, e, f = transform
+    if b or c or a <= 0 or not math.isclose(a, -d):
+        return ()
+    radius = float(attributes.get("stroke-width", "1")) * a / (2 * scale)
+    if not 0.1 <= radius <= 2:
+        return ()
+    coordinates = map(float, COORD.findall(path))
+    points = tuple(((a*x + e) / scale, (d*y + f) / scale, radius)
+                   for x, y in zip(coordinates, coordinates, strict=True))
+    if any(left[0] >= right[0] for left, right in zip(points, points[1:])):
+        return ()
+    return points
+
+
 def paired_ticks(box: Box, lines: list[tuple[float, float, float, float]], words: tuple[Word, ...], *,
                  vertical: bool) -> list[tuple[float, float]]:
     result = []
@@ -349,7 +405,7 @@ def calibration(ticks: list[tuple[float, float]], *, vertical: bool) -> Affine |
 
 
 def read_panel_geometry(svg: str | bytes, words: tuple[Word, ...], size: tuple[float, float], *,
-                        marker_opacity: str = "0.5", expansion: int = 1, region: Box | None = None) -> PageGeometry:
+                        marker_opacity: str | None = "0.5", expansion: int = 1, region: Box | None = None) -> PageGeometry:
     root = ElementTree.fromstring(svg)
     view = tuple(map(float, root.attrib.get("viewBox", "").split()))
     if root.tag != SVG + "svg" or len(view) != 4 or view[:2] != (0, 0) or any(
@@ -360,7 +416,19 @@ def read_panel_geometry(svg: str | bytes, words: tuple[Word, ...], size: tuple[f
     paths = list(visible_paths(root))
     boxes = [box for attributes in paths if (box := white_rectangle(attributes, scale))]
     ticks = [tick for attributes in paths if (tick := tick_segment(attributes, scale))]
-    markers = [marker for attributes in paths if (marker := scatter_marker(attributes, marker_opacity, scale))]
+    if marker_opacity is None:
+        if region is None:
+            return ()
+        curves = [curve for attributes in paths if (curve := contour_vertices(attributes, scale))
+                  and all(region.contains(x, y) for x, y, _ in curve)]
+        if len(curves) < 2 or len({len(curve) for curve in curves}) != 1:
+            return ()
+        markers = [(*point, (curve_number, vertex_number))
+                   for curve_number, curve in enumerate(curves, start=1)
+                   for vertex_number, point in enumerate(curve, start=1)]
+    else:
+        markers = [(*marker, None) for attributes in paths
+                   if (marker := scatter_marker(attributes, marker_opacity, scale))]
     if region:
         boxes = [box for box in boxes if region.contains(box.x0, box.y0) and region.contains(box.x1, box.y1)]
         markers = [marker for marker in markers if region.contains(marker[0], marker[1])]
@@ -373,7 +441,7 @@ def read_panel_geometry(svg: str | bytes, words: tuple[Word, ...], size: tuple[f
         if x_axis is None or y_axis is None:
             continue
         points = []
-        for x, y, radius in markers:
+        for x, y, radius, contour in markers:
             if not box.contains(x, y):
                 continue
             scores = x_axis.evaluate(x), y_axis.evaluate(y)
@@ -384,7 +452,7 @@ def read_panel_geometry(svg: str | bytes, words: tuple[Word, ...], size: tuple[f
             x0, y0, x1, y1 = (x - radius) / width, (y - radius) / height, (x + radius) / width, (y + radius) / height
             if not (0 <= x0 < x1 <= 1 and 0 <= y0 < y1 <= 1):
                 return ()
-            points.append(ScatterPoint(*(min(1, max(0, score)) for score in scores), (x0, y0, x1, y1)))
+            points.append(ScatterPoint(*(min(1, max(0, score)) for score in scores), (x0, y0, x1, y1), contour))
         panels.append(tuple(points))
     if not all(panels) or sum(map(len, panels)) != len(markers):
         return ()

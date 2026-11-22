@@ -3,7 +3,15 @@ import unittest
 from unittest.mock import patch
 
 from pdf_pages import Page, Word
-from vector_scatter import read_page_geometry, read_panel_geometry, read_vector_noisy_scatter
+from vector_scatter import (
+    ScatterFigure,
+    ScatterPanel,
+    ScatterPoint,
+    read_page_geometry,
+    read_panel_geometry,
+    read_vector_noisy_contours,
+    read_vector_noisy_scatter,
+)
 
 
 # D014 PDF page 16, Figure 10, GPT-4o-mini / Wizard of Wikipedia panel.
@@ -101,6 +109,33 @@ NOISY_WORDS = (
     Word("Recall", 312.823049, 138.818635, 321.758203, 152.922855),
 )
 
+CONTOUR_SVG = """<svg viewBox="0 0 595.276 841.89" xmlns="http://www.w3.org/2000/svg">
+<path fill="rgb(100%, 100%, 100%)" fill-opacity="1" d="M 333.238281 440.15625 L 468.054688 440.15625 L 468.054688 314.578125 L 333.238281 314.578125 Z"/>
+<path fill="none" stroke="rgb(34.831238%, 46.569824%, 88.833618%)" stroke-opacity="1" stroke-width="1.5" d="M 70.582594 185.178224 L 70.681929 161.586244 L 70.772985 182.554134" transform="matrix(0.47189, 0, 0, -0.47189, 306.056083, 458.094632)"/>
+<path fill="none" stroke="rgb(70%, 10%, 15%)" stroke-opacity="1" stroke-width="1.5" d="M 70.582594 165.178224 L 70.681929 131.586244 L 70.772985 142.554134" transform="matrix(0.47189, 0, 0, -0.47189, 306.056083, 458.094632)"/>
+<path fill="none" stroke="rgb(0%, 0%, 0%)" d="M 338.9219 440.15625 L 338.9219 441.81"/>
+<path fill="none" stroke="rgb(0%, 0%, 0%)" d="M 388.1251 440.15625 L 388.1251 441.81"/>
+<path fill="none" stroke="rgb(0%, 0%, 0%)" d="M 461.9259 440.15625 L 461.9259 441.81"/>
+<path fill="none" stroke="rgb(0%, 0%, 0%)" d="M 333.2383 425.86326 L 331.586 425.86326"/>
+<path fill="none" stroke="rgb(0%, 0%, 0%)" d="M 333.2383 370.30072 L 331.586 370.30072"/>
+<path fill="none" stroke="rgb(0%, 0%, 0%)" d="M 333.2383 314.73819 L 331.586 314.73819"/>
+</svg>"""
+
+CONTOUR_WORDS = (
+    Word("0.0", 335, 440, 343, 449),
+    Word("0.4", 384, 440, 392, 449),
+    Word("1.0", 458, 440, 466, 449),
+    Word("0.4", 322, 421, 330, 430),
+    Word("0.6", 322, 366, 330, 375),
+    Word("0.8", 322, 310, 330, 319),
+    Word("Knowledge", 376.834053, 446.463004, 402.810103, 455.398157),
+    Word("Precision", 404.312537, 446.463004, 425.398293, 455.398157),
+    Word("Answer", 312.823049, 372.289649, 321.758203, 389.690484),
+    Word("F1", 312.823049, 365.065680, 321.758203, 370.787214),
+    Word("Figure", 306.144307, 467.320829, 331.637683, 479.326362),
+    Word("6:", 333.863838, 467.320829, 341.460103, 479.326362),
+)
+
 
 class VectorScatterTest(unittest.TestCase):
     def test_reads_marker_using_both_pdf_tick_axes_and_preserves_bbox(self):
@@ -169,3 +204,32 @@ class VectorScatterTest(unittest.TestCase):
             for words in (NOISY_WORDS[:-1], NOISY_WORDS[:8] + NOISY_WORDS[10:]):
                 with patch("vector_scatter.positioned_words", return_value=(words, (595.276, 841.89))):
                     self.assertEqual(read_vector_noisy_scatter(Path("noisy.pdf"), [page]), ())
+
+    def test_reads_contour_vertices_only_if_corresponding_scatter_precision_is_present(self):
+        # Values of the first three Figure 6 vertices and the corresponding
+        # points on the Figure 5 precision axis on D014 page 13.
+        page = Page(13, "Figure 6: Color contours of answer F1 versus the knowledge precision for "
+                        "GPT-4o-mini on noisy HotpotQA. Each contour represents a different knowledge recall score.",
+                    "text_match")
+        bbox = (0.55, 0.43, 0.57, 0.45)
+        points = tuple(ScatterPoint(x, .1, bbox) for x in (.00359421, .00396825, .00432312))
+        panel = ScatterPanel("Noisy HotpotQA", "GPT-4o-mini", points)
+        scatter = ScatterFigure(page, "Figure 5", "Knowledge precision", (panel,),
+                                "Knowledge recall", "noisy knowledge annotations")
+        with patch("vector_scatter.run", return_value=CONTOUR_SVG), \
+                patch("vector_scatter.positioned_words", return_value=(CONTOUR_WORDS, (595.276, 841.89))):
+            contour, = read_vector_noisy_contours(Path("noisy.pdf"), (scatter,))
+            self.assertEqual((contour.label, contour.metric, contour.vertical_metric),
+                             ("Figure 6", None, "Answer F1"))
+            (series,) = contour.panels
+            self.assertEqual((series.dataset, series.generator), ("Noisy HotpotQA", "GPT-4o-mini"))
+            first = series.points[0]
+            self.assertEqual((f"{first.x:.4f}", f"{first.y:.4f}", first.contour), ("0.0036", "0.5985", (1, 1)))
+            self.assertEqual(series.points[3].contour, (2, 1))
+            self.assertLess(first.bbox[0], 0.57006)
+            self.assertGreater(first.bbox[2], 0.57006)
+            self.assertLess(first.bbox[1], 0.44025)
+            self.assertGreater(first.bbox[3], 0.44025)
+            missing_positions = ScatterPanel("Noisy HotpotQA", "GPT-4o-mini", points[:1])
+            mismatched = ScatterFigure(page, "Figure 5", "Knowledge precision", (missing_positions,))
+            self.assertEqual(read_vector_noisy_contours(Path("noisy.pdf"), (mismatched,)), ())

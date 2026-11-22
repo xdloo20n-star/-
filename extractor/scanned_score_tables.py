@@ -32,6 +32,10 @@ DECIMAL_ELO = re.compile(r"\d{3,4}\.\d{2}")
 BOOTSTRAP = re.compile(r"(\d{3,4}\.\d{2})\s*\((\d{3,4})-(\d{3,4})\)")
 TIME = re.compile(r"\d{1,3}\.\d{1,3}")
 COMPONENT = re.compile(r"[\w-]+ Retriever|Question Ret\. Sys\.|[\w-]+ BUFFERS|CONTEXT TRANSF\.", re.I)
+COMPONENT_BOUNDS = (.085, .075, .895, .339)
+COMPONENT_ROWS = (546, 602, 658, 716, 770, 827, 884, 1063, 1119, 1174, 1232, 1290)
+COMPONENT_SIZE = re.compile(r"(\d+(?:\.\d+)?)(MB|GB)")
+DOCUMENT_COUNT = re.compile(r"[~∼](\d+)")
 WIN_HEADING = re.compile(r"(.+?) General Qs Mul[ .-]+Hop [QO]s", re.I)
 WIN_PERCENT = re.compile(r"(?:100|[1-9]?\d)%")
 
@@ -362,14 +366,79 @@ def rank_table(page: Page, label: str, caption: str, interval_evidence: tuple[Pa
     return Table(page, label, caption, 0, columns, rows, family="scanned_scores", value_bboxes=tuple(bounds))
 
 
-def latency_table(page: Page, label: str, caption: str) -> Table | None:
+def component_label(words: tuple[Word, ...], y: int) -> str:
+    return " ".join(w.text for w in sorted(words, key=lambda w: w.x)
+                    if 170 < w.x and w.x1 < 790 and y - 2 < w.y < y + 31)
+
+
+def component_inventory_tables(page: Page, label: str, caption: str,
+                               views: tuple[tuple[ScanImage, tuple[Word, ...]], ...]) -> list[Table]:
+    _, positioned = views[0]
+    header = [w.text for w in sorted(positioned, key=lambda w: w.x)
+              if 250 < w.y < 305 and (2200 < w.x < 2410 or 2820 < w.x < 3090)]
+    if header != ["Size", "No.", "Doc."]:
+        return []
+
+    def confirmed_cell(y, left, right, offset, pattern):
+        readings = {}
+        for image, words in views:
+            scale = image.dpi / 480
+            cell = sorted((w for w in words if left < w.x / scale < right and abs(w.y / scale - y - offset) < 21),
+                          key=lambda word: word.x)
+            raw = "".join(w.text for w in cell)
+            match = pattern.fullmatch(raw)
+            if raw != "-" and not match:
+                continue
+            if match and pattern is DOCUMENT_COUNT:
+                # OCR prints the mathematical approximation glyph as an ASCII tilde.
+                raw = f"∼{match[1]}"
+            box = image.source_bbox(min(w.x0 for w in cell), min(w.y0 for w in cell),
+                                    max(w.x1 for w in cell), max(w.y1 for w in cell))
+            readings.setdefault(raw, []).append(box)
+        agreed = [(raw, boxes[0]) for raw, boxes in readings.items() if len(boxes) >= 2]
+        return agreed[0] if len(agreed) == 1 else None
+
+    tables = []
+    for index, y in enumerate(COMPONENT_ROWS, start=1):
+        component = component_label(positioned, y)
+        if not COMPONENT.fullmatch(component):
+            continue
+        columns, values, boxes = [], [], []
+        for title, name, left, right, offset, pattern in (
+            ("Size", "dense retriever size", 2200, 2410, 3, COMPONENT_SIZE),
+            ("No. Doc.", "knowledge-base document count", 2820, 3090, -9, DOCUMENT_COUNT),
+        ):
+            if cell := confirmed_cell(y, left, right, offset, pattern):
+                raw, box = cell
+                size = COMPONENT_SIZE.fullmatch(raw)
+                columns.append(Column(Header(title, name, (left + right) / 2, None, size[2] if size else None), None))
+                values.append(raw)
+                boxes.append(box)
+        if values:
+            tables.append(Table(page, label, caption, index, columns, [(component, values)],
+                                family="scanned_scores", value_bboxes=(tuple(boxes),)))
+    return tables
+
+
+def component_view(page: Page, dpi: int = 480, *, inventory: bool = False) -> tuple[ScanImage, tuple[Word, ...]]:
+    image = deskew(scan_region(page.scan, COMPONENT_BOUNDS, dpi=dpi)) if dpi != 480 else deskew(
+        scan_region(page.scan, COMPONENT_BOUNDS))
+    if not inventory:
+        return image, recognize(image, page.scan.engine)
+    scale = dpi / 480
+    x0, y0, x1, y1 = (round(value * scale) for value in (2200, 478, 3100, 1324))
+    words = recognize(image.crop(x0, y0, x1, y1), page.scan.engine)
+    return image, tuple(Word(w.text, w.x0 + x0, w.y0 + y0, w.x1 + x0, w.y1 + y0) for w in words)
+
+
+def latency_table(page: Page, label: str, caption: str, *,
+                  positioned: tuple[ScanImage, tuple[Word, ...]] | None = None) -> Table | None:
     source = page.scan
     if not fragment(page, r"Struc\s*tured\s+and\s+Unstructured\s+RAG\s+components"):
         return None
     if not fragment(page, r"Mean Time\s*\(s\)") or not fragment(page, r"Time Std\."):
         return None
-    image = deskew(scan_region(source, (.085, .075, .895, .339)))
-    words = recognize(image, source.engine)
+    image, words = positioned or component_view(page)
     headings = [w.text for w in sorted(words, key=lambda w: w.x) if 340 < w.y < 389]
     if headings != ["GPU", "CPU", "GPU", "CPU"]:
         return None
@@ -378,9 +447,8 @@ def latency_table(page: Page, label: str, caption: str) -> Table | None:
                for printed, aggregation, start in (("Mean Time (s)", "mean", 855), ("Time Std.", "std", 1235))
                for device, x in (("GPU", start), ("CPU", start + 190))]
     rows, bounds = [], []
-    for y in (546, 602, 658, 716, 770, 827, 884, 1063, 1119, 1174, 1232, 1290):
-        component = " ".join(w.text for w in sorted(words, key=lambda w: w.x)
-                             if 170 < w.x and w.x1 < 790 and y - 2 < w.y < y + 31)
+    for y in COMPONENT_ROWS:
+        component = component_label(words, y)
         if not COMPONENT.fullmatch(component):
             continue
         values, boxes = [], []
@@ -426,8 +494,12 @@ def read_scanned_score_tables(pages: list[Page], tables: list[Table]) -> list[Ta
                 print(f"page {page.number}, {wins[1]} crop OCR: {error}", file=sys.stderr)
         if page.scan and (timing := CAPTION_VII.search(page.prose) or CAPTION_VII.search(page.text)):
             try:
-                if table := latency_table(page, timing[1], f"{timing[0]} Performance summary of RAG components"):
+                caption = f"{timing[0]} Performance summary of RAG components"
+                primary = component_view(page)
+                if table := latency_table(page, timing[1], caption, positioned=primary):
                     recovered.append(table)
+                    views = (primary, *(component_view(page, dpi, inventory=True) for dpi in (360, 405)))
+                    recovered.extend(component_inventory_tables(page, timing[1], caption, views))
             except (ExtractionError, ValueError) as error:
                 print(f"page {page.number}, {timing[1]} crop OCR: {error}", file=sys.stderr)
         if page.scan and (rank := CAPTION_V.search(page.prose)):

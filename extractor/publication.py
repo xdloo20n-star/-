@@ -23,11 +23,13 @@ from opinion_tables import read_opinion_tables
 from paired_scores import enrich_repeated_score_rows, read_additional_score_tables
 from pdf_pages import PDF, Page
 from prostep_context import enrich_prostep_context
+from prostep_appendix import read_prostep_appendix
 from qa_comparison import enrich_qa_comparisons
 from rag_tables import Column, MISSING, Table, read_tables
 from reasoning_tables import read_reasoning_tables
 from retrieval_tables import read_retrieval_tables
 from scanned_score_tables import read_scanned_score_tables
+from synthetic_accuracy import read_synthetic_accuracy
 from training_scan import read_training_scan_tables
 from training_scan_pairs import read_training_scan_pairs
 from training_tables import read_training_tables
@@ -79,6 +81,13 @@ EVALUATION_STATEMENT = re.compile(
 RAGAS_PROTOCOL = re.compile(r"\b(?:using the RAGAS framework|evaluated (?:with|using) RAGAS)\b", re.I)
 UNIT_TEXT = r"%|percent(?:ages?)?|fractions?|ms|s|sec|seconds?|milliseconds?"
 UNIT_STATEMENT = r"(?:are|is|were)\s+(?:(?:reported|expressed|measured)\s+)?(?:in|as)\s+(?:an?\s+)?"
+VALUE_LITERAL = r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)"
+NONSCALAR_VALUE = re.compile(
+    rf"(?:[<>≤≥]\s*(?:{VALUE_LITERAL}|10-\d+)|{VALUE_LITERAL}\s*[–—-]\s*{VALUE_LITERAL}|[↑↓]\s*{VALUE_LITERAL})"
+)
+CELL_UNIT = re.compile(r"\s*(pp|MB|GB)$")
+APPROXIMATE_PREFIX = re.compile(r"^[∼~≈]\s*(?=[+−\-\d.])")
+TOKEN_MULTIPLIER = {"k": 1000, "M": 1000000}
 CONTRAST = re.compile(r"\b(?:except|unlike|whereas|rather than|instead of|but)\b", re.I)
 METRIC_VARIANTS = (
     (re.compile(r"\bexact\s+match\b.{0,180}\bstandard\s+text\s+normalization\b", re.I | re.S),
@@ -293,6 +302,8 @@ def extract_publication(pdf: PDF, *, source_path: Path | None = None) -> dict[st
     extracted_tables += read_retrieval_tables(pdf.pages, extracted_tables)
     extracted_tables += read_benchmark_distributions(pdf.pages, extracted_tables)
     extracted_tables += read_native_benchmark_tables(pdf.pages, extracted_tables)
+    extracted_tables += read_prostep_appendix(pdf.pages, extracted_tables)
+    extracted_tables = read_synthetic_accuracy(pdf.pages, extracted_tables)
     extracted_tables += read_training_tables(pdf.pages, extracted_tables)
     extracted_tables += read_training_scan_tables(pdf.pages, extracted_tables)
     extracted_tables += read_training_scan_pairs(pdf.pages, extracted_tables)
@@ -417,14 +428,28 @@ def add_histogram_figures(payload: Payload, figures: tuple[HistogramFigure, ...]
 
 def scale_and_value(raw: str, header_unit: str | None, *,
                     grouped_digits: bool = False) -> tuple[str | None, str | None, float | None, str]:
-    unit = "%" if raw.endswith("%") else header_unit
+    suffix = CELL_UNIT.search(raw)
+    unit = "%" if raw.endswith("%") else suffix[1] if suffix and header_unit is None else header_unit
     scale = {"%": "percent", "percent": "percent", "fraction": "fraction"}.get((unit or "").lower())
-    number = raw.removesuffix("%").replace("−", "-").replace(",", "" if grouped_digits else ".")
     if raw in MISSING:
         return unit, scale, None, "absent"
+    if suffix and suffix[1] != unit:
+        return unit, scale, None, "present_not_extractable"
+    cell = (raw[:suffix.start()] if suffix else raw.removesuffix("%")).strip()
+    number = cell.replace("−", "-").replace(",", "" if grouped_digits else ".")
+    if NONSCALAR_VALUE.fullmatch(number):
+        return unit, scale, None, "extracted"
+    number = APPROXIMATE_PREFIX.sub("", number)
+    factor = 1
+    if unit == "tokens" and number[-1:] in TOKEN_MULTIPLIER:
+        factor = TOKEN_MULTIPLIER[number[-1]]
+        number = number[:-1]
     if re.match(r"^[+-]?0\d", number):
         return unit, scale, None, "present_not_extractable"
-    value = float(number)
+    try:
+        value = float(number) * factor
+    except ValueError:
+        return unit, scale, None, "present_not_extractable"
     if not math.isfinite(value):
         return unit, scale, None, "present_not_extractable"
     return unit, scale, value, "extracted"
@@ -631,7 +656,8 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
                 **({"sample_size": column.sample_size} if column.sample_size is not None else {}),
             )
             if duplicate_index is not None and column.duplicate_scope and status == "extracted":
-                key = (column.duplicate_scope, config_name, *configuration_key, table.retriever_model, table.top_k, column.dataset,
+                key = (column.duplicate_scope, config_name, *configuration_key, table.retriever_model,
+                       table.retrieval_method, table.config_note, table.top_k, column.dataset,
                        column.data_split or table.data_split or split, name, metric_variant, cutoff,
                        column.aggregation, column.sample_size, unit, result_scale, raw, origin,
                        citation[1] if citation else None)
@@ -686,6 +712,10 @@ def add_configuration(payload: Payload, table: Table, row: str, name: str | None
     cutoff = TOP_K.search(row) if name is not None else None
     generator = column.generator
     context = {"retriever_model": table.retriever_model} if table.retriever_model else {}
+    if table.retrieval_method:
+        context["retrieval_method"] = table.retrieval_method
+    if table.config_note:
+        context["note"] = table.config_note
     if column.generator_version:
         context["generator_version"] = column.generator_version
     config_id = payload.add(
@@ -702,6 +732,10 @@ def add_configuration(payload: Payload, table: Table, row: str, name: str | None
         payload.cite("configuration", config_id, "top_k", *table.top_k_evidence)
     if table.retriever_model:
         payload.cite("configuration", config_id, "retriever_model", table.page, table.retriever_model, table=table.label)
+    if table.retrieval_method:
+        payload.cite("configuration", config_id, "retrieval_method", table.page, table.retrieval_method, table=table.label)
+    if table.config_note:
+        payload.cite("configuration", config_id, "note", table.page, table.config_note, table=table.label)
     if column.generator_evidence:
         payload.cite("configuration", config_id, "generator_model", *column.generator_evidence)
     elif generator:

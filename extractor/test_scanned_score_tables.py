@@ -6,7 +6,10 @@ from unittest.mock import patch
 from pdf_pages import Page, ScanSource, Word
 from publication import Payload, add_table
 from scan_ocr import ScanImage
-from scanned_score_tables import CVE_GRID, bootstrap_cell, latency_table, metric_columns, rank_table, read_scanned_score_tables
+from scanned_score_tables import (
+    CVE_GRID, bootstrap_cell, component_inventory_tables, latency_table, metric_columns, rank_table,
+    read_scanned_score_tables,
+)
 
 
 CAPTION = "TABLE II: Comparative Assessment of RAG Models on 156 General and 150 Multi-Hop Cybersecurity Questions"
@@ -247,6 +250,51 @@ class ScannedScoreTableTest(unittest.TestCase):
         self.assertEqual([(c.header.name, c.aggregation, c.header.unit) for c in table.columns],
                          [("retrieval latency", "mean", "s")] * 2 + [("retrieval latency", "std", "s")] * 2)
         self.assertEqual(table.value_bboxes[0][1], self.canvas.source_bbox(1025, 537, 1065, 555))
+
+    def test_component_inventory_retains_attached_units_and_approximation(self):
+        headings = [Word("Size", 2265, 269, 2327, 295), Word("No.", 2854, 258, 2900, 281),
+                    Word("Doc.", 2952, 256, 3012, 279)]
+        labels = [Word("Malware", 330, 553, 414, 579), Word("Retriever", 480, 553, 619, 579)]
+        clipped = [Word("3.9MB", 2245, 536, 2351, 563), Word("~", 2861, 533, 2891, 548),
+                   Word("1000", 2940, 521, 3014, 549)]
+        alternate = [Word("3.9MB", 2243, 535, 2353, 563), Word("~1000", 2859, 522, 3016, 550)]
+        page = Page(13, "TABLE VII: Performance summary of Structured and Unstructured RAG components.",
+                    "ocr_match", scan=self.scan)
+        views = ((self.canvas, headings + labels), (self.canvas, clipped), (self.canvas, alternate))
+        table, = component_inventory_tables(page, "TABLE VII", page.text, views)
+        payload = Payload(document={}, publication={})
+        add_table(payload, table, True)
+        self.assertEqual([(r["metric_name"], r["raw_value"], r["raw_unit"], r["reported_value"])
+                          for r in payload.results],
+                         [("dense retriever size", "3.9MB", "MB", 3.9),
+                          ("knowledge-base document count", "∼1000", None, 1000)])
+        self.assertEqual(payload.configurations[0]["rag_variant"], "Malware Retriever")
+        self.assertIsNone(payload.configurations[0]["generator_model"])
+        size, count = [e for e in payload.evidence if e["entity_type"] == "result" and e["field"] == "raw_value"]
+        self.assertEqual((count["page"], count["table"], count["table_row"], count["table_column"]),
+                         (13, "TABLE VII", "Malware Retriever", "No. Doc."))
+        self.assertEqual(size["bbox"], self.canvas.source_bbox(2245, 536, 2351, 563))
+        self.assertEqual(count["bbox"], self.canvas.source_bbox(2861, 521, 3014, 549))
+
+    def test_component_inventory_leaves_disagreeing_counts_unread(self):
+        headings = [Word("Size", 2265, 269, 2327, 295), Word("No.", 2854, 258, 2900, 281),
+                    Word("Doc.", 2952, 256, 3012, 279)]
+        labels = [Word("ExploitDB", 330, 666, 414, 691), Word("Retriever", 480, 660, 619, 684)]
+        dash = Word("-", 2290, 658, 2308, 667)
+        clipped = [dash, Word("~13000", 2859, 638, 3014, 665)]
+        alternate = [dash, Word("~18000", 2859, 638, 3014, 665)]
+        page = Page(13, "TABLE VII: Performance summary of Structured and Unstructured RAG components.",
+                    "ocr_match", scan=self.scan)
+        views = ((self.canvas, headings + labels), (self.canvas, clipped), (self.canvas, alternate))
+        table, = component_inventory_tables(page, "TABLE VII", page.text, views)
+        self.assertEqual(table.rows, [("ExploitDB Retriever", ["-"])])
+        payload = Payload(document={}, publication={})
+        add_table(payload, table, True)
+        row, = payload.results
+        self.assertEqual((row["metric_name"], row["raw_value"], row["extraction_status"], row["reported_value"]),
+                         ("dense retriever size", "-", "absent", None))
+        self.assertEqual(component_inventory_tables(page, "TABLE VII", page.text,
+                                                   ((self.canvas, labels), *views[1:])), [])
 
 
 if __name__ == "__main__":

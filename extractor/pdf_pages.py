@@ -14,6 +14,12 @@ TABLE_HEADING = re.compile(r"^\s*table\s+(?:\d+|[ivxlcdm]+)\b", re.I | re.M)
 CONTROL_GLYPHS = re.compile(r"[\x00-\x08\x0b-\x0c\x0e-\x1f]")
 FAILURE_RATE_HEADINGS = re.compile(r"\bLeak\s*(?:↓\s*)?Stale\s*(?:↓\s*)?Unsup\.", re.I)
 POSITIONED_TABLE = re.compile(
+    r"Our training complements retrieval augmentation|"
+    r"Empirical W\s*1? between corpus-level|OpinioBank results \(public hotel reviews\)|"
+    r"Retrieval diversity improvements|Entity-Split-Only ablation at k=|Semantic-only vs\. hybrid retrieval at k=|"
+    r"Ablation study of the STM \(SN, STG\)|Comparison of construction \(Const\.\), inference|"
+    r"Controlled Graph-Free ablation|Comparison of evidence selection strategies on|"
+    r"Intrinsic evaluation of the semantic boundary|"
     r"Statistics of XRAG question types|Statistics of the datasets\.\s+#Doc|"
     r"Number of examples and percentages by|Retrieval performance comparison on the|"
     r"Ablation study on Bayesian components|Performance comparison with different generator models on MMLongBench-Doc|"
@@ -21,6 +27,9 @@ POSITIONED_TABLE = re.compile(
     r"Diversity metrics at different retrieval depths \(k\) using hybrid retrieval|"
     r"Sentiment-Intensity σ by question type|Diversity metrics on entity-matched docu|"
     r"Training metrics for the outcome filter main|"
+    r"Agreement between QwQ-32B|Per-step-type agreement on the \d+-sample|"
+    r"Results at the \d+B scale \(EM / F1, %\)|Intermediate-Flawed-But-Correct \(IFBC\) rate|"
+    r"Per-dataset paired t-test on EM|"
     r"Performance comparison on DocBench with different generators|"
     r"LLM QA accuracy in (?:answering XRAG ques|the XRAG (?:monolingual|multilingual))|"
     r"Controlled analysis of (?:GPT-4o|Claude Sonnet 3\.5|Mistral-large|Command-R\+) on|"

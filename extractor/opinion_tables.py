@@ -5,6 +5,7 @@ from decimal import Decimal
 import re
 
 from failure_rates import visual_rows
+from grouped_scores import native_evidence
 from native_benchmark_tables import aligned, normalized_boxes, positioned_caption, words_text
 from pdf_pages import Page, Word
 from rag_tables import Column, Header, Table
@@ -44,6 +45,23 @@ ENTITY_METRICS = (
 )
 MATCHED_DOCS = re.compile(r"Matched Docs \(of (\d+)\)")
 SIGNED_CHANGE = re.compile(r"([+−-]\d+\.\d+%)\*?")
+DISTANCE_PREFIX = re.compile(r"Empirical W(?=\s|1)")
+HOTEL_PREFIX = re.compile(r"OpinioBank results \(public hotel reviews\)")
+SPLIT_PREFIX = re.compile(r"Entity-Split-Only ablation at k=")
+RETRIEVAL_PREFIX = re.compile(r"Semantic-only vs\. hybrid retrieval at k=")
+GENERATION = re.compile(r"Response generation from the retrieved context\s+used (Anthropic Claude Sonnet) (4\.5)\.")
+HOTELS = {
+    "Silverton": "OpinioBank: Silverton Las Vegas", "Silverton LV": "OpinioBank: Silverton Las Vegas",
+    "Ambassador": "OpinioBank: Ambassador Bangkok", "Ambassador Bangkok": "OpinioBank: Ambassador Bangkok",
+    "Ala Moana": "OpinioBank: Ala Moana Honolulu", "Ala Moana Honolulu": "OpinioBank: Ala Moana Honolulu",
+}
+RAW_KB = "Traditional RAG Raw KB"
+ENRICHED_KB = "O-RAG Enriched"
+SPLIT_METRICS = tuple(METRICS[i][1] for i in (1, 2, 6))
+RETRIEVAL_METRICS = {
+    "Sent-Int σ": METRICS[1], "Biz Impact σ": METRICS[2], "Revenue Band (%)": METRICS[3],
+    "Tenure (%)": METRICS[4], "Evidence (%)": METRICS[5], "Emot. Markers": METRICS[6],
+}
 
 
 def read_opinion_tables(pages: list[Page], known: list[Table]) -> list[Table]:
@@ -78,18 +96,228 @@ def read_opinion_tables(pages: list[Page], known: list[Table]) -> list[Table]:
                 index, depth = reference
                 base = tables[index]
                 scope = (base.page.number, base.label)
-                tables[index] = replace(base, top_k=depth,
+                tables[index] = replace(base, top_k=depth, retrieval_method="hybrid",
                                         top_k_evidence=(base.page, f"k={depth}"), columns=[
                     replace(column, header=replace(column.header, name=METRICS[position][1]),
                             dataset=DATASET, duplicate_scope=scope)
                     for column, position in zip(base.columns, MAIN_COLUMNS, strict=True)
                 ])
-                depth_tables = [replace(table, columns=[
+                depth_tables = [replace(table, retrieval_method="hybrid", columns=[
                     replace(column, dataset=DATASET, duplicate_scope=scope if table.top_k == depth else None)
                     for column in table.columns
                 ]) for table in depth_tables]
             tables.extend(depth_tables)
-    return [table for table in tables if (table.page.number, table.label.casefold()) not in replaced] + comparisons
+    tables = [table for table in tables if (table.page.number, table.label.casefold()) not in replaced] + comparisons
+    return tables + read_opinion_supplement(pages, tables)
+
+
+def read_opinion_supplement(pages: list[Page], known: list[Table]) -> list[Table]:
+    occupied = {(table.page.number, table.label.casefold()) for table in known}
+    generation = native_evidence(pages, GENERATION)
+    reference = next((table for table in known if table.retrieval_method == "hybrid" and table.columns
+                      and table.columns[0].duplicate_scope == (table.page.number, table.label)), None)
+    tables = []
+    for page in pages:
+        if page.verification != "text_match" or not page.words or not page.size:
+            continue
+        rows = visual_rows(page.words)
+        for prefix, reader in ((DISTANCE_PREFIX, read_distance), (HOTEL_PREFIX, read_hotels),
+                               (SPLIT_PREFIX, read_split_ablation), (RETRIEVAL_PREFIX, read_retrieval_method)):
+            for caption in re.finditer(r"(?:^ *|(?<= {2}))(Table \d+): " + prefix.pattern, page.text, re.M):
+                if (page.number, caption[1].casefold()) in occupied:
+                    continue
+                if anchor := positioned_caption(rows, caption[1], prefix):
+                    tables.extend(reader(page, caption[1], anchor, reference))
+    if generation:
+        page, statement = generation
+        model, version = GENERATION.fullmatch(statement).groups()
+        tables = [replace(table, columns=[replace(column, generator=model, generator_version=version,
+                                                  generator_evidence=(page, model), generator_version_evidence=(page, version))
+                                          if not column.duplicate_scope else column
+                                          for column in table.columns]) for table in tables]
+    return tables
+
+
+def opinion_grid(page: Page, anchor: Word, heading: str, count: int, *, full_width: bool = False):
+    midpoint = page.size[0] / 2
+    left, right = ((0, page.size[0]) if full_width else
+                   (0, midpoint) if anchor.x < midpoint else (midpoint, page.size[0]))
+    words = sorted((word for word in page.words if left < word.x < right and anchor.y - 2 <= word.y < anchor.y + 155),
+                   key=lambda word: word.y)
+    rows = []
+    for word in words:
+        if not rows or word.y - rows[-1][0].y > 3:
+            rows.append([])
+        rows[-1].append(word)
+    for row in rows:
+        row.sort(key=lambda word: word.x)
+    headers = [i for i, row in enumerate(rows) if re.sub(r"\bW 1\b", "W1", words_text(row)) == heading]
+    if len(headers) != 1:
+        return None
+    index, = headers
+    data = rows[index + 1:index + count + 1]
+    if len(data) != count:
+        return None
+    caption = re.sub(r"\bW 1\b", "W1", " ".join(words_text(row) for row in rows[:index]))
+    return caption, rows[index], data
+
+
+def read_distance(page: Page, label: str, anchor: Word, reference: Table | None) -> list[Table]:
+    grid = opinion_grid(page, anchor, "Dataset Raw W1 Enriched W1 ∆", 4)
+    if not grid:
+        return []
+    caption, heading, rows = grid
+    match = re.search(r"Empirical W1 between corpus-level and re-? ?trieved sentiment distributions "
+                      r"\((k=(\d+))\)\. Lower is better\.", caption)
+    if not match or int(match[2]) <= 0:
+        return []
+    depth = int(match[2])
+    enriched = next(i for i, word in enumerate(heading) if word.text == "Enriched")
+    centers = ((heading[1].x0 + heading[enriched - 1].x1) / 2,
+               (heading[enriched].x0 + heading[-2].x1) / 2, heading[-1].x)
+    names = {"Forums": DATASET, **{key: HOTELS[key] for key in ("Silverton", "Ambassador", "Ala Moana")}}
+    if [words_text(row[:-3]) for row in rows] != list(names):
+        return []
+    tables = []
+    for row_name, row in zip(names, rows, strict=True):
+        cells = row[-3:]
+        raw, enriched, delta = (word.text for word in cells)
+        if not (aligned(cells, centers, 9) and DECIMAL.fullmatch(raw) and DECIMAL.fullmatch(enriched)
+                and re.fullmatch(r"[+−-]\d+(?:\.\d+)?%", delta)):
+            return []
+        if Decimal(raw) == Decimal(enriched) or (delta.startswith("+") != (Decimal(enriched) > Decimal(raw))):
+            return []
+        specs = (("Raw W1", "W1 sentiment distribution distance", None, "lower_is_better"),
+                 ("Enriched W1", "W1 sentiment distribution distance", None, "lower_is_better"),
+                 ("∆", "W1 relative change", "%", None))
+        columns = [Column(Header(title, metric, center, depth, unit), names[row_name], direction=direction,
+                          source_label=title)
+                   for center, (title, metric, unit, direction) in zip(centers, specs, strict=True)]
+        for name, start, end in ((RAW_KB, 0, 1), (ENRICHED_KB, 1, 3)):
+            tables.append(Table(page, label, caption, len(tables), columns[start:end],
+                                [(row_name, [word.text for word in cells[start:end]])], config_name=name,
+                                top_k=depth, top_k_evidence=(page, match[1]), value_bboxes=normalized_boxes(page, cells[start:end])))
+    return tables
+
+
+def read_hotels(page: Page, label: str, anchor: Word, reference: Table | None) -> list[Table]:
+    grid = opinion_grid(page, anchor, "Property Reviews Entities Entity Match ∆ Sent-Int σ ∆", 3, full_width=True)
+    if not grid:
+        return []
+    caption, heading, rows = grid
+    if not caption.endswith("Entity match improvement and sentiment-intensity σ change vs. Raw KB."):
+        return []
+    centers = (heading[1].x, heading[2].x, (heading[3].x0 + heading[5].x1) / 2, (heading[6].x0 + heading[8].x1) / 2)
+    names = ("Silverton LV", "Ambassador Bangkok", "Ala Moana Honolulu")
+    if [words_text(row[:-4]) for row in rows] != list(names):
+        return []
+    tables = []
+    for row_name, row in zip(names, rows, strict=True):
+        reviews, entities, match_gain, sentiment_gain = (word.text for word in row[-4:])
+        if not (aligned(row[-4:], centers, 9) and re.fullmatch(r"\d{1,3}(?:,\d{3})*", reviews)
+                and entities.isdecimal() and re.fullmatch(r"[+−-]\d+\.\d+pp", match_gain)
+                and re.fullmatch(r"[+−-]\d+\.\d+", sentiment_gain)):
+            return []
+        specs = (("Entity Match ∆", "Entity Match Rate absolute gain", "pp"),
+                 ("Sent-Int σ ∆", "Sentiment-Intensity sigma absolute gain", None))
+        columns = [Column(Header(title, metric, word.x, None, unit), HOTELS[row_name], source_label=title)
+                   for word, (title, metric, unit) in zip(row[-2:], specs, strict=True)]
+        tables.append(Table(page, label, caption, len(tables), columns, [(row_name, [match_gain, sentiment_gain])],
+                            config_name=ENRICHED_KB, value_bboxes=normalized_boxes(page, row[-2:])))
+    return tables
+
+
+def reference_scope(reference: Table | None, depth: int, metrics: tuple[str, ...],
+                    values: list[list[str]]) -> tuple[int, str] | None:
+    if reference is None or depth != reference.top_k:
+        return None
+    lookup = {column.header.name: i for i, column in enumerate(reference.columns)}
+    if not set(metrics) <= lookup.keys():
+        return None
+    expected = [[row[lookup[metric]] for metric in metrics] for _, row in reference.rows]
+    return (reference.page.number, reference.label) if values == expected else None
+
+
+def read_split_ablation(page: Page, label: str, anchor: Word, reference: Table | None) -> list[Table]:
+    grid = opinion_grid(page, anchor, "KB Config Sent-Int σ Biz Impact Emot Marker", 3)
+    if not grid:
+        return []
+    caption, heading, rows = grid
+    match = re.search(r"Entity-Split-Only ablation at (k=(\d+)) \((Sonnet 4\.5|Mistral Large)\)\.", caption)
+    if not match or int(match[2]) <= 0:
+        return []
+    depth, model = int(match[2]), match[3]
+    row_names = ("Raw", "Entity-Split Only", "Full O-RAG")
+    if [words_text(row[:-3]) for row in rows] != list(row_names):
+        return []
+    centers = tuple((heading[i].x0 + heading[i + 1].x1) / 2 for i in (2, 4, 6))
+    values = [[word.text.removesuffix("*") for word in row[-3:]] for row in rows]
+    if not all(aligned(row[-3:], centers, 9) and all(DECIMAL.fullmatch(value) for value in row_values)
+               for row, row_values in zip(rows, values, strict=True)):
+        return []
+    repeated = reference_scope(reference, depth, SPLIT_METRICS, [values[0], values[2]]) if model == "Sonnet 4.5" else None
+    tables = []
+    for i, (row_name, row, row_values, config) in enumerate(zip(
+        row_names, rows, values, (RAW_KB, "O-RAG Entity-Split Only", ENRICHED_KB), strict=True,
+    )):
+        scope = repeated if i != 1 else None
+        if scope:
+            config = reference.rows[0 if i == 0 else 1][0]
+        titles = ("Sent-Int σ", "Biz Impact", "Emot Marker")
+        columns = [Column(Header(title, metric, center, depth, None), DATASET, source_label=title, duplicate_scope=scope)
+                   for title, metric, center in zip(titles, SPLIT_METRICS, centers, strict=True)]
+        tables.append(Table(page, label, caption, i, columns, [(row_name, row_values)], config_name=config,
+                            top_k=depth, top_k_evidence=(page, match[1]), value_bboxes=normalized_boxes(page, row[-3:]),
+                            retrieval_method="hybrid" if repeated else None,
+                            config_note=f"Opinion extraction: {model}" if not scope and i else None))
+    return tables
+
+
+def read_retrieval_method(page: Page, label: str, anchor: Word, reference: Table | None) -> list[Table]:
+    grid = opinion_grid(page, anchor, "Metric Raw Enr. (∆) Raw Enr. (∆)", 6)
+    if not grid:
+        return []
+    caption, heading, rows = grid
+    match = re.search(r"Semantic-only vs\. hybrid retrieval at (k=(\d+))\.", caption)
+    if not match or not caption.endswith(" Semantic Hybrid") or int(match[2]) <= 0:
+        return []
+    depth = int(match[2])
+    groups = [(word.text, word.x) for word in sorted(page.words, key=lambda word: word.x)
+              if 3 < heading[0].y - word.y < 20 and 0 < word.x < page.size[0] / 2]
+    if (tuple(text for text, x in groups) != ("Semantic", "Hybrid")
+            or not all(words[0].x < group_x < words[-1].x
+                       for (_, group_x), words in zip(groups, (heading[1:4], heading[4:7]), strict=True))):
+        return []
+    if [words_text(row[:-6]) for row in rows] != list(RETRIEVAL_METRICS):
+        return []
+    centers = tuple(word.x for word in heading[1:])
+    repeated = reference_scope(reference, depth, tuple(spec[1] for spec in RETRIEVAL_METRICS.values()),
+                               [[row[index].text for row in rows] for index in (-3, -2)])
+    tables = []
+    for row, (printed, (_, metric, unit)) in zip(rows, RETRIEVAL_METRICS.items(), strict=True):
+        cells = row[-6:]
+        if not aligned(cells, centers, 13):
+            return []
+        for group, name, selected in (("Semantic", "semantic-only", cells[:3]), ("Hybrid", "hybrid", cells[3:])):
+            raw, enriched, marked = (word.text for word in selected)
+            change = SIGNED_CHANGE.fullmatch(marked[1:-1]) if marked.startswith("(") and marked.endswith(")") else None
+            if (not DECIMAL.fullmatch(raw) or not DECIMAL.fullmatch(enriched) or not change
+                    or Decimal(raw) == Decimal(enriched) or (change[1].startswith("+") != (Decimal(enriched) > Decimal(raw)))):
+                return []
+            scope = repeated if name == "hybrid" else None
+            titles = (f"{group} / Raw", f"{group} / Enr.", f"{group} / ∆")
+            columns = [Column(Header(title, metric_name, cell.x, depth, metric_unit), DATASET, source_label=title,
+                              duplicate_scope=scope if metric_name == metric else None)
+                       for title, metric_name, cell, metric_unit in zip(
+                           titles, (metric, metric, f"{metric} relative change"), selected, (unit, unit, "%"), strict=True,
+                       )]
+            names = (reference.rows[0][0], reference.rows[1][0]) if scope else (RAW_KB, ENRICHED_KB)
+            for config, start, end in ((names[0], 0, 1), (names[1], 1, 3)):
+                tables.append(Table(page, label, caption.removesuffix(" Semantic Hybrid"), len(tables), columns[start:end],
+                                    [(printed, [raw, enriched, change[1]][start:end])], row_section=group, config_name=config,
+                                    top_k=depth, top_k_evidence=(page, match[1]), retrieval_method=name,
+                                    value_bboxes=normalized_boxes(page, selected[start:end])))
+    return tables
 
 
 def read_comparison(page: Page, label: str, rows: list[list[Word]], anchor: Word, entity: bool) -> list[Table]:

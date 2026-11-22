@@ -78,6 +78,142 @@ ENTITY_ROWS = [
 ]
 
 
+def positioned_grid(number, caption, rows):
+    words = tuple(Word(text, x - 2, y - 2, x + 2, y + 2)
+                  for y, cells in rows for x, text in cells)
+    return Page(number, caption, "text_match", words=words, size=(595, 842))
+
+
+def result_at(payload, table, row, column):
+    source = next(e for e in payload["evidence"] if e["field"] == "raw_value" and e.get("table") == table
+                  and e.get("table_row") == row and e.get("table_column") == column)
+    result = next(r for r in payload["results"] if r["result_id"] == source["entity_id"])
+    config = next(c for c in payload["configurations"] if c["config_id"] == result["config_id"])
+    dataset = next(d for d in payload["datasets"] if d["dataset_id"] == result["dataset_id"])
+    return result, config, dataset, source
+
+
+class OpinionSupplementTest(unittest.TestCase):
+    def distance_page(self, final_delta_x=498):
+        caption = "Table 3: Empirical W1 between corpus-level and retrieved sentiment distributions (k=20). Lower is better."
+        return positioned_grid(6, caption, [
+            (234, list(zip((317, 336, 365, 393, 400, 423, 468, 504, 520),
+                           "Table 3: Empirical W 1 between corpus-level and retrieved".split(), strict=True))),
+            (246, list(zip((320, 355, 402, 445, 477, 496, 514),
+                           "sentiment distributions (k=20). Lower is better.".split()))),
+            (283, [(336, "Dataset"), (387, "Raw"), (402, "W"), (409, "1"), (441, "Enriched"), (465, "W"),
+                   (472, "1"), (498, "∆")]),
+            (298, [(335, "Forums"), (394, "8.87"), (448, "7.24"), (498, "−18%")]),
+            (308, [(338, "Silverton"), (394, "15.31"), (448, "9.17"), (498, "−40%")]),
+            (318, [(344, "Ambassador"), (394, "19.15"), (448, "14.54"), (498, "−24%")]),
+            (328, [(328, "Ala"), (349, "Moana"), (394, "12.88"), (448, "6.75"), (final_delta_x, "−48%")]),
+        ])
+
+    def test_distance_uses_signed_percent_hotel_row_and_cutoff(self):
+        payload = extract_publication(PDF({"Title": "Opinion-Enriched RAG"}, [self.distance_page()]))
+        self.assertEqual(len(payload["results"]), 12)
+        result, config, dataset, source = result_at(payload, "Table 3", "Ala Moana", "∆")
+        self.assertEqual((result["metric_name"], result["raw_value"], result["raw_unit"], result["metric_k"],
+                          config["top_k"], dataset["dataset_name"], source["page"]),
+                         ("W1 relative change", "−48%", "%", 20, 20, "OpinioBank: Ala Moana Honolulu", 6))
+        self.assertEqual(source["bbox"], (496 / 595, 326 / 842, 500 / 595, 330 / 842))
+
+    def test_distance_rejects_delta_that_moves_under_another_header(self):
+        self.assertEqual(read_opinion_tables([self.distance_page(final_delta_x=465)], []), [])
+
+    def hotel_page(self, data="+37.9pp"):
+        caption = "Table 4: OpinioBank results (public hotel reviews). Entity match improvement and sentiment-intensity σ change vs.\nRaw KB."
+        return positioned_grid(7, caption, [
+            (77, list(zip((81, 98, 129, 168, 198, 224, 254, 287, 313, 354, 389, 436, 480, 499, 521),
+                          caption.splitlines()[0].split(), strict=True))),
+            (89, [(80, "Raw"), (100, "KB.")]),
+            (114, [(166, "Property"), (256, "Reviews"), (298, "Entities"), (336, "Entity"), (363, "Match"),
+                   (382, "∆"), (413, "Sent-Int"), (434, "σ"), (443, "∆")]),
+            (129, [(165, "Silverton"), (189, "LV"), (256, "2,297"), (298, "4"), (355, data), (422, "+5.04")]),
+            (139, [(171, "Ambassador"), (212, "Bangkok"), (256, "1,230"), (298, "4"), (355, "+37.2pp"),
+                   (422, "+7.09")]),
+            (149, [(155, "Ala"), (176, "Moana"), (208, "Honolulu"), (256, "2,729"), (298, "4"), (355, "+18.9pp"),
+                   (422, "+3.00")]),
+        ])
+
+    def test_hotel_absolute_gain_preserves_percentage_points(self):
+        payload = extract_publication(PDF({"Title": "Opinion-Enriched RAG"}, [self.hotel_page()]))
+        self.assertEqual(len(payload["results"]), 6)
+        result, config, dataset, source = result_at(payload, "Table 4", "Silverton LV", "Entity Match ∆")
+        self.assertEqual((result["metric_name"], result["raw_value"], result["raw_unit"], result["reported_value"],
+                          config["top_k"], dataset["dataset_name"], source["page"]),
+                         ("Entity Match Rate absolute gain", "+37.9pp", "pp", 37.9, None,
+                          "OpinioBank: Silverton Las Vegas", 7))
+        self.assertEqual(source["bbox"], (353 / 595, 127 / 842, 357 / 595, 131 / 842))
+
+    def test_hotel_gain_rejects_a_percent_substitution_for_percentage_points(self):
+        self.assertEqual(read_opinion_tables([self.hotel_page(data="+37.9%")], []), [])
+
+
+class OpinionMethodTest(unittest.TestCase):
+    def ablation_page(self, misplaced=False):
+        caption = ("Table 8: Entity-Split-Only ablation at k=20 (Mistral\n"
+                   "Large). Bold = highest per metric, * = p<0.001 vs.\nEntity-Split.")
+        return positioned_grid(14, caption, [
+            (419, list(zip((317, 335, 380, 435, 458, 477, 508), caption.splitlines()[0].split(), strict=True))),
+            (431, list(zip((321, 352, 369, 390, 415, 439, 460, 469, 493, 521), caption.splitlines()[1].split(),
+                           strict=True))),
+            (443, [(331, "Entity-Split.")]),
+            (467, list(zip((317, 338, 396, 416, 433, 456, 488, 515),
+                           "KB Config Sent-Int σ Biz Impact Emot Marker".split(), strict=True))),
+            (483, [(318, "Raw"), (400, "6.53"), (448, "9.24"), (504, "3.2")]),
+            (493, [(331, "Entity-Split"), (363, "Only"), (400, "7.37"), (448, "10.27"), (504, "3.5")]),
+            (503, [(317, "Full"), (341, "O-RAG"), (423 if misplaced else 400, "8.11*"), (448, "10.94*"), (504, "4.1*")]),
+        ])
+
+    def retrieval_page(self, *, bad_group=False):
+        caption = "Table 11: Semantic-only vs. hybrid retrieval at k=20.\nBold = p<0.05, * = p<0.001."
+        rows = [
+            (496, list(zip((81, 102, 142, 181, 203, 235, 259, 278), caption.splitlines()[0].split(), strict=True))),
+            (508, list(zip((81, 96, 118, 139, 147, 171), caption.splitlines()[1].split(), strict=True))),
+            (532, [(171, "Semantic"), (176 if bad_group else 250, "Hybrid")]),
+            (544, list(zip((84, 143, 176, 189, 221, 254, 268), "Metric Raw Enr. (∆) Raw Enr. (∆)".split(), strict=True))),
+        ]
+        for index, (name, values) in enumerate([
+            ("Sent-Int σ", "8.93 10.84 (+21.4%*) 9.12 11.56 (+26.8%*)"),
+            ("Biz Impact σ", "10.47 11.63 (+11.1%) 10.55 12.08 (+14.5%)"),
+            ("Revenue Band (%)", "79.1 68.7 (−13.1%*) 78.3 68.1 (−13.0%*)"),
+            ("Tenure (%)", "81.5 76.8 (−5.8%) 81.2 75.6 (−6.9%)"),
+            ("Evidence (%)", "44.3 43.8 (−1.1%) 44.3 46.4 (+4.7%)"),
+            ("Emot. Markers", "7.1 8.4 (+18.3%) 7.2 8.9 (+23.6%*)"),
+        ]):
+            rows.append((557 + index * 8, [*zip((78, 94, 110), name.split()),
+                                           *zip((143, 165, 191, 221, 243, 270), values.split(), strict=True)]))
+        return positioned_grid(16, caption, rows)
+
+    def test_entity_split_grid_keeps_model_separate_from_task_generator(self):
+        generation = "Response generation from the retrieved context\nused Anthropic Claude Sonnet 4.5."
+        payload = extract_publication(PDF({"Title": "Opinion-Enriched RAG"},
+                                          [Page(13, generation, "text_match"), self.ablation_page()]))
+        result, config, dataset, source = result_at(payload, "Table 8", "Full O-RAG", "Sent-Int σ")
+        self.assertEqual((result["metric_name"], result["raw_value"], result["metric_k"], config["top_k"], config["note"],
+                          config["generator_model"], config["generator_version"], dataset["dataset_name"]),
+                         ("Sentiment-Intensity sigma", "8.11", 20, 20, "Opinion extraction: Mistral Large",
+                          "Anthropic Claude Sonnet", "4.5", "E-commerce seller forums"))
+        self.assertEqual(source["bbox"], (398 / 595, 501 / 842, 402 / 595, 505 / 842))
+
+    def test_entity_split_grid_rejects_unaligned_ablation_score(self):
+        self.assertEqual(read_opinion_tables([self.ablation_page(misplaced=True)], []), [])
+
+    def test_retrieval_grid_preserves_group_and_signed_change(self):
+        payload = extract_publication(PDF({"Title": "Opinion-Enriched RAG"}, [self.retrieval_page()]))
+        self.assertEqual(len(payload["results"]), 36)
+        result, config, dataset, source = result_at(payload, "Table 11", "Semantic / Revenue Band (%)", "Semantic / ∆")
+        self.assertEqual((result["metric_name"], result["raw_value"], result["raw_unit"], result["metric_k"],
+                          config["retrieval_method"], config["top_k"], dataset["dataset_name"]),
+                         ("Revenue Band Coverage relative change", "−13.1%", "%", 20, "semantic-only", 20,
+                          "E-commerce seller forums"))
+        self.assertEqual(source["bbox"], (189 / 595, 571 / 842, 193 / 595, 575 / 842))
+
+    def test_retrieval_grid_rejects_unaligned_group_headings(self):
+        self.assertEqual(read_opinion_tables([self.retrieval_page(bad_group=True)], []), [])
+
+
 class OpinionComparisonTest(unittest.TestCase):
     def test_questions_keep_signed_relative_change_and_printed_cutoff(self):
         page = comparison_page(16, QUESTION_CAPTION, 227, "Question Type Raw Enriched ∆", (183, 229, 281),

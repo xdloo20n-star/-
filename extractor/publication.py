@@ -3,6 +3,7 @@
 from collections import defaultdict
 from dataclasses import dataclass, field
 import math
+from pathlib import Path
 import re
 from typing import Any
 
@@ -16,13 +17,19 @@ from failure_diagnostics import order_audit_summaries
 from failure_ablations import link_ablation_averages
 from grouped_scores import enrich_grouped_scores
 from knowledge_benchmarks import read_knowledge_benchmarks
+from native_benchmark_tables import read_native_benchmark_tables
 from paired_scores import enrich_repeated_score_rows, read_additional_score_tables
 from pdf_pages import PDF, Page
+from prostep_context import enrich_prostep_context
 from qa_comparison import enrich_qa_comparisons
 from rag_tables import Column, MISSING, Table, read_tables
 from reasoning_tables import read_reasoning_tables
 from retrieval_tables import read_retrieval_tables
+from scanned_score_tables import read_scanned_score_tables
+from training_scan import read_training_scan_tables
+from training_scan_pairs import read_training_scan_pairs
 from training_tables import read_training_tables
+from vector_scatter import ScatterFigure, read_vector_length_scatter, read_vector_scatter
 from watermark_tables import read_watermark_tables
 
 RAG = re.compile(r"\bRAG(?:s)?\b|retrieval[\s-]+augmented\s+generation", re.I)
@@ -225,7 +232,7 @@ def publication_year(page: Page) -> tuple[int | None, str | None]:
     return None, None
 
 
-def extract_publication(pdf: PDF) -> dict[str, Any]:
+def extract_publication(pdf: PDF, *, source_path: Path | None = None) -> dict[str, Any]:
     first_page = pdf.pages[0]
     title = (pdf.metadata.get("Title") or "").strip()
     template_title = bool(TEMPLATE_TITLE.search(title))
@@ -280,12 +287,17 @@ def extract_publication(pdf: PDF) -> dict[str, Any]:
     extracted_tables += read_watermark_tables(pdf.pages, extracted_tables)
     extracted_tables += read_retrieval_tables(pdf.pages, extracted_tables)
     extracted_tables += read_benchmark_distributions(pdf.pages, extracted_tables)
+    extracted_tables += read_native_benchmark_tables(pdf.pages, extracted_tables)
     extracted_tables += read_training_tables(pdf.pages, extracted_tables)
+    extracted_tables += read_training_scan_tables(pdf.pages, extracted_tables)
+    extracted_tables += read_training_scan_pairs(pdf.pages, extracted_tables)
     extracted_tables += read_context_recall_tables(pdf.pages, extracted_tables)
     extracted_tables = read_factuality_tables(pdf.pages, extracted_tables)
     extracted_tables = read_reasoning_tables(pdf.pages, extracted_tables)
+    extracted_tables = read_scanned_score_tables(pdf.pages, extracted_tables)
     extracted_tables = enrich_grouped_scores(pdf.pages, extracted_tables)
     extracted_tables = enrich_repeated_score_rows(pdf.pages, extracted_tables)
+    extracted_tables = enrich_prostep_context(pdf.pages, extracted_tables)
     extracted_tables = enrich_qa_comparisons(pdf.pages, extracted_tables)
     extracted_tables = link_ablation_averages(pdf.pages, extracted_tables)
     extracted_tables, audit_summaries = order_audit_summaries(pdf.pages, extracted_tables)
@@ -299,7 +311,61 @@ def extract_publication(pdf: PDF) -> dict[str, Any]:
                 add_table(payload, table, question_answering, tables, duplicate_index)
     for table in audit_summaries:
         add_table(payload, table, question_answering, by_page[table.page.number], duplicate_index)
+    if source_path is not None:
+        figures = read_vector_scatter(source_path, pdf.pages) + read_vector_length_scatter(source_path, pdf.pages)
+        add_scatter_figures(payload, figures)
     return payload.as_dict()
+
+
+def add_scatter_figures(payload: Payload, figures: tuple[ScatterFigure, ...]) -> None:
+    datasets = {}
+    experiments = {}
+    for figure in figures:
+        for panel_number, panel in enumerate(figure.panels, start=1):
+            if panel.dataset not in datasets:
+                datasets[panel.dataset] = (
+                    payload.add("datasets", "dataset_id", "dataset", dataset_name=panel.dataset,
+                                dataset_version=None, data_split=None),
+                    payload.add("tasks", "task_id", "task", task_type="question answering"),
+                )
+            dataset_id, task_id = datasets[panel.dataset]
+            for point_number, point in enumerate(panel.points, start=1):
+                vertical = f"~{point.y:.4f}"
+                is_answer = figure.vertical_metric == "Answer F1"
+                # Only the matched precision/recall/F1 series has verified
+                # point identity across multiple figures.
+                series = figure.condition if is_answer else figure.label
+                key = series, panel_number, point_number, panel.dataset, panel.generator, vertical
+                if key not in experiments:
+                    experiments[key] = (
+                        payload.add("configurations", "config_id", "config",
+                                    rag_variant=figure.condition, generator_model=panel.generator,
+                                    top_k=None),
+                        payload.add("experiments", "experiment_id", "experiment", evaluation_protocol=None,
+                                    note=f"Panel {panel_number}, point {point_number}. {figure.condition}"),
+                        None,
+                    )
+                config_id, experiment_id, canonical = experiments[key]
+                for metric, value in ((figure.metric, point.x), (figure.vertical_metric, point.y)):
+                    raw = f"~{value:.4f}"
+                    result_id = payload.add(
+                        "results", "result_id", "result", config_id=config_id, dataset_id=dataset_id,
+                        task_id=task_id, experiment_id=experiment_id, metric_name=metric,
+                        metric_variant=None, metric_direction="higher_is_better", metric_k=None,
+                        metric_k_applicability="not_applicable", reported_value=float(raw[1:]),
+                        reported_scale="fraction", raw_value=raw, raw_unit=None, aggregation=None,
+                        result_origin="primary", cited_publication_id=None, extraction_status="extracted",
+                        note=f"Panel {panel_number}, point {point_number}. Calibrated native vector coordinates "
+                             "(approximate ±0.0001 fraction).",
+                    )
+                    if metric == "Answer F1" and is_answer:
+                        if canonical:
+                            payload.results[-1]["duplicate_of"] = canonical
+                        else:
+                            experiments[key] = config_id, experiment_id, result_id
+                    # The caption verifies the figure locator. The number comes from the point geometry.
+                    payload.cite("result", result_id, "raw_value", figure.page, f"{figure.label}:",
+                                 figure=figure.label, bbox=point.bbox)
 
 
 def scale_and_value(raw: str, header_unit: str | None, *,

@@ -115,6 +115,17 @@ type NumericComparison struct {
 
 func Compare(left, right ResultDetail) Comparison {
 	criteria, status := compareConditions(left, right)
+	if left.ExtractionMode != right.ExtractionMode {
+		criteria = append(criteria, Criterion{"extraction_mode", "mismatch", "Режимы извлечения различаются."})
+		status = NotComparable
+	}
+	if left.Normalized == nil || right.Normalized == nil ||
+		left.Result.Text("extraction_status") != "extracted" || right.Result.Text("extraction_status") != "extracted" {
+		criteria = append(criteria, Criterion{"numeric_value", "missing", "Для одного или обоих результатов нет подтверждённого числового значения."})
+		if status == Comparable {
+			status = InsufficientInformation
+		}
+	}
 	comparison := Comparison{
 		LeftResultID:        left.Result.Text("result_id"),
 		RightResultID:       right.Result.Text("result_id"),

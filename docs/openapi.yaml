@@ -202,7 +202,10 @@ paths:
                 right_result_id: {$ref: '#/components/schemas/ID'}
       responses:
         '200':
-          description: Comparability decision for the pair, including criteria that could not be evaluated
+          description: >-
+            Comparability decision for the pair, including criteria that could not be evaluated.
+            Different extraction modes are not comparable. A missing normalized value or a result
+            without extracted status makes a pair insufficient unless another criterion mismatches.
           content:
             application/json:
               schema: {$ref: '#/components/schemas/Comparison'}

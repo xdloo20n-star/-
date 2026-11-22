@@ -206,8 +206,7 @@ def read_vector_noisy_contours(path: Path, scatter: tuple[ScatterFigure, ...]) -
     return tuple(figures)
 
 
-def scatter_caption_region(words: tuple[Word, ...], width: float, figure: str,
-                           vertical_axis: tuple[str, str]) -> Box | None:
+def figure_region(words: tuple[Word, ...], width: float, figure: str) -> Box | None:
     label, number = figure.split()
     captions = [(first, second.text) for first, second in zip(words, words[1:]) if
                 first.text.casefold() == label.casefold() and re.fullmatch(r"\d+:", second.text)
@@ -218,7 +217,14 @@ def scatter_caption_region(words: tuple[Word, ...], width: float, figure: str,
     caption, = matching
     top = max((other.y1 for other, _ in captions
                if abs(other.x0 - caption.x0) < 1 and other.y1 < caption.y0), default=0)
-    region = Box(caption.x0, top, width, caption.y0)
+    return Box(caption.x0, top, width, caption.y0)
+
+
+def scatter_caption_region(words: tuple[Word, ...], width: float, figure: str,
+                           vertical_axis: tuple[str, str]) -> Box | None:
+    region = figure_region(words, width, figure)
+    if region is None:
+        return None
     # Verify both PDF axis labels in this caption's plot region.
     visible = tuple(word for word in words if region.contains(word.x, word.y))
     labels = set()
@@ -295,10 +301,14 @@ def matrix(attributes: dict[str, str]) -> tuple[float, ...] | None:
 
 
 def white_rectangle(attributes: dict[str, str], scale: float) -> Box | None:
-    path = attributes.get("d", "")
-    if attributes.get("fill") != WHITE or attributes.get("fill-opacity") != "1" or "transform" in attributes:
+    if attributes.get("fill") != WHITE or attributes.get("fill-opacity") != "1":
         return None
-    if not RECTANGLE.fullmatch(path):
+    return rectangle_path(attributes, scale)
+
+
+def rectangle_path(attributes: dict[str, str], scale: float) -> Box | None:
+    path = attributes.get("d", "")
+    if "transform" in attributes or not RECTANGLE.fullmatch(path):
         return None
     coordinates = tuple(map(float, COORD.findall(path)))[:8]
     xs, ys = set(coordinates[::2]), set(coordinates[1::2])
@@ -404,15 +414,21 @@ def calibration(ticks: list[tuple[float, float]], *, vertical: bool) -> Affine |
     return mapping
 
 
-def read_panel_geometry(svg: str | bytes, words: tuple[Word, ...], size: tuple[float, float], *,
-                        marker_opacity: str | None = "0.5", expansion: int = 1, region: Box | None = None) -> PageGeometry:
-    root = ElementTree.fromstring(svg)
+def surface_scale(root: ElementTree.Element, size: tuple[float, float], expansion: int) -> float | None:
     view = tuple(map(float, root.attrib.get("viewBox", "").split()))
     if root.tag != SVG + "svg" or len(view) != 4 or view[:2] != (0, 0) or any(
         not abs(svg_size - pdf_size * expansion) <= 1 for svg_size, pdf_size in zip(view[2:], size, strict=True)
     ):
+        return None
+    return min(view[2] / size[0], view[3] / size[1]) if expansion > 1 else 1
+
+
+def read_panel_geometry(svg: str | bytes, words: tuple[Word, ...], size: tuple[float, float], *,
+                        marker_opacity: str | None = "0.5", expansion: int = 1, region: Box | None = None) -> PageGeometry:
+    root = ElementTree.fromstring(svg)
+    scale = surface_scale(root, size, expansion)
+    if scale is None:
         return ()
-    scale = min(view[2] / size[0], view[3] / size[1]) if expansion > 1 else 1
     paths = list(visible_paths(root))
     boxes = [box for attributes in paths if (box := white_rectangle(attributes, scale))]
     ticks = [tick for attributes in paths if (tick := tick_segment(attributes, scale))]

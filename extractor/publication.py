@@ -31,6 +31,7 @@ from scanned_score_tables import read_scanned_score_tables
 from training_scan import read_training_scan_tables
 from training_scan_pairs import read_training_scan_pairs
 from training_tables import read_training_tables
+from vector_histogram import HistogramFigure, METRIC as HISTOGRAM_METRIC, read_vector_histograms
 from vector_scatter import (
     ScatterFigure, read_vector_length_scatter, read_vector_noisy_contours, read_vector_noisy_scatter, read_vector_scatter,
 )
@@ -322,6 +323,7 @@ def extract_publication(pdf: PDF, *, source_path: Path | None = None) -> dict[st
         figures = (read_vector_scatter(source_path, pdf.pages) + read_vector_length_scatter(source_path, pdf.pages)
                    + noisy + read_vector_noisy_contours(source_path, noisy))
         add_scatter_figures(payload, figures)
+        add_histogram_figures(payload, read_vector_histograms(source_path, pdf.pages))
     return payload.as_dict()
 
 
@@ -380,6 +382,37 @@ def add_scatter_figures(payload: Payload, figures: tuple[ScatterFigure, ...]) ->
                     # The caption verifies the figure locator. The number comes from the point geometry.
                     payload.cite("result", result_id, "raw_value", figure.page, f"{figure.label}:",
                                  figure=figure.label, bbox=point.bbox)
+
+
+def add_histogram_figures(payload: Payload, figures: tuple[HistogramFigure, ...]) -> None:
+    for figure in figures:
+        config_id = payload.add("configurations", "config_id", "config",
+                                rag_variant="single candidate knowledge sentence", generator_model=figure.generator,
+                                top_k=None)
+        contexts = {}
+        for bar in figure.bars:
+            if bar.dataset not in contexts:
+                contexts[bar.dataset] = (
+                    payload.add("datasets", "dataset_id", "dataset", dataset_name=bar.dataset,
+                                dataset_version=None, data_split=None),
+                    payload.add("tasks", "task_id", "task", task_type="question answering"),
+                    payload.add("experiments", "experiment_id", "experiment", evaluation_protocol=None,
+                                note="Each candidate knowledge sentence is fed individually to the generator."),
+                )
+            dataset_id, task_id, experiment_id = contexts[bar.dataset]
+            raw = f"~{bar.value:.4f}"
+            result_id = payload.add(
+                "results", "result_id", "result", config_id=config_id, dataset_id=dataset_id,
+                task_id=task_id, experiment_id=experiment_id, metric_name=HISTOGRAM_METRIC,
+                metric_variant=bar.metric_variant, metric_direction=None, metric_k=None,
+                metric_k_applicability="not_applicable", reported_value=float(raw[1:]),
+                reported_scale="fraction", raw_value=raw, raw_unit=None,
+                aggregation="frequency / all individual-sentence generations",
+                result_origin="primary", cited_publication_id=None, extraction_status="extracted",
+                note="Approximate fraction from the calibrated height of the PDF vector bar.",
+            )
+            payload.cite("result", result_id, "raw_value", figure.page, f"{figure.label}:",
+                         figure=figure.label, bbox=bar.bbox)
 
 
 def scale_and_value(raw: str, header_unit: str | None, *,

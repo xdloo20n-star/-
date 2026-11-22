@@ -8,6 +8,10 @@ const SELECTION_KEY = "sverka.comparison.v1";
 const UNKNOWN = "не указано";
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 const FILTER_NAMES = ["q", "metric_name", "has_issues", "document_id", "dataset_id", "task_id", "config_id"];
+const RESULT_SORTS = [["", "По умолчанию"], ["asc", "По возрастанию"], ["desc", "По убыванию"]];
+const RESULT_PAGE_SIZE = 25;
+const SORT_FETCH_SIZE = 100;
+const SORT_FETCH_CONCURRENCY = 4;
 const ACTIVE_STATUSES = new Set(["queued", "processing"]);
 const STATUS_LABELS = {
   queued: "В очереди", processing: "Извлекаем данные", completed: "Обработан", failed: "Ошибка извлечения",
@@ -246,7 +250,7 @@ async function exportJSON(trigger, documentId) {
 }
 
 function documentExport(id) {
-  return button("Выгрузить JSON", "button button-secondary", (event) => exportJSON(event.currentTarget, id));
+  return button("Скачать JSON статьи", "button button-secondary", (event) => exportJSON(event.currentTarget, id));
 }
 
 function showDocuments(screen, params) {
@@ -256,14 +260,16 @@ function showDocuments(screen, params) {
   input.accept = ".pdf,application/pdf";
   input.tabIndex = -1;
   input.setAttribute("aria-label", "Файл PDF");
+  const instruction = element("p", "muted", "Перетащите сюда один PDF или выберите файл на устройстве.");
+  instruction.id = "upload-instructions";
   const choose = button("Выбрать PDF", "button button-primary", () => input.click());
+  choose.setAttribute("aria-describedby", instruction.id);
   choose.disabled = uploadInProgress;
   const uploadStatus = element("div", "upload-status");
   uploadStatus.setAttribute("aria-live", "polite");
   const drop = element("section", "panel upload-panel",
     element("div", "document-symbol", element("span", "", "PDF")),
-    element("div", "upload-copy", element("h2", "", "Загрузить статью"),
-      element("p", "muted", "Выберите или перетащите сюда один файл PDF."), uploadStatus),
+    element("div", "upload-copy", element("h2", "", "Загрузить статью"), instruction, uploadStatus),
     choose, input,
   );
   drop.firstChild.setAttribute("aria-hidden", "true");
@@ -315,9 +321,10 @@ function showDocuments(screen, params) {
 
   const list = element("div", "panel list-panel");
   const count = element("span", "section-count");
+  count.setAttribute("aria-live", "polite");
   const refresh = button("Обновить", "button button-secondary button-small", load);
   WORKSPACE.append(screenHeading("Документы"), drop,
-    element("section", "workspace-section", sectionHeading("Очередь документов", count, refresh), list));
+    element("section", "workspace-section", sectionHeading("Загруженные статьи", count, refresh), list));
 
   let loading = false;
   let generation = 0;
@@ -392,8 +399,8 @@ function renderDocumentRow(row, doc) {
   const time = element("time", "mono", Number.isNaN(date.getTime()) ? UNKNOWN : DATE_FORMAT.format(date));
   time.dateTime = doc.uploaded_at;
   const action = doc.status === "completed"
-    ? link("Результаты", resultsRoute({ document_id: doc.document_id }), "text-link document-action")
-    : link("Открыть статус", documentRoute(doc.document_id), "text-link document-action");
+    ? link("Открыть результаты", resultsRoute({ document_id: doc.document_id }), "button button-secondary button-small document-action")
+    : link("Посмотреть статус", documentRoute(doc.document_id), "button button-secondary button-small document-action");
   row.replaceChildren(element("div", "document-identity", filename,
     element("div", "document-meta", time, doc.corpus_id ? element("span", "mono", doc.corpus_id) : null),
     doc.failure ? element("p", "text-error document-error", doc.failure.message) : null),
@@ -489,6 +496,8 @@ function resultFilters(params) {
     const value = params.get(name)?.trim();
     if (value) filters.set(name, value);
   }
+  const sort = params.get("sort");
+  if (sort && RESULT_SORTS.some(([value]) => value === sort)) filters.set("sort", sort);
   return filters;
 }
 
@@ -506,20 +515,18 @@ function filterInput(name, label, filters, placeholder, type = "text") {
 }
 
 function renderFilters(filters, resetHref, reload) {
-  const issues = element("select", "");
+  const issues = element("input", "");
+  issues.type = "hidden";
   issues.name = "has_issues";
-  for (const [value, title] of [["", "Все"], ["true", "Есть замечания"], ["false", "Без замечаний"]]) {
-    issues.add(new Option(title, value));
-  }
   issues.value = filters.get("has_issues") ?? "";
 
-  const submit = element("button", "button button-primary", "Применить");
+  const submit = element("button", "button button-primary", "Найти");
   submit.type = "submit";
   const reset = resetHref ? link("Сбросить", resetHref, "text-link filter-reset") : null;
   const form = element("form", "panel filters",
-    element("div", "filter-main", filterInput("q", "Поиск", filters, "Статья, датасет", "search"),
-      filterInput("metric_name", "Метрика", filters, "Recall@5"),
-      element("label", "filter-field", element("span", "", "Замечания"), issues), submit),
+    element("div", "filter-main", filterInput("q", "Поиск по результатам", filters, "Статья, датасет или конфигурация", "search"),
+      filterInput("metric_name", "Метрика", filters, "Например, EM"), submit),
+    issues,
   );
   const extra = element("details", "filter-extra", element("summary", "", "Дополнительные фильтры"),
     element("div", "filter-grid", filterInput("document_id", "ID документа", filters),
@@ -530,11 +537,79 @@ function renderFilters(filters, resetHref, reload) {
   form.append(element("div", "filter-footer", extra, reset));
   form.addEventListener("submit", (event) => {
     event.preventDefault();
-    const next = resultsRoute(resultFilters(new URLSearchParams(new FormData(form))));
+    const nextFilters = new URLSearchParams(new FormData(form));
+    if (filters.has("sort")) nextFilters.set("sort", filters.get("sort"));
+    const next = resultsRoute(resultFilters(nextFilters));
     if (next === location.hash) reload();
     else location.hash = next;
   });
   return form;
+}
+
+function reviewFilters(filters, from) {
+  const active = filters.get("has_issues") ?? "";
+  const nav = element("nav", "review-filters");
+  nav.setAttribute("aria-label", "Фильтр по замечаниям");
+  for (const [value, label] of [["", "Все"], ["true", "С замечаниями"], ["false", "Без замечаний"]]) {
+    const next = new URLSearchParams(filters);
+    if (value) next.set("has_issues", value);
+    else next.delete("has_issues");
+    const tab = link(label, value === active ? from : resultsRoute(next), "review-filter");
+    if (value === active) tab.setAttribute("aria-current", "true");
+    nav.append(tab);
+  }
+  return nav;
+}
+
+function resultSort(filters) {
+  const select = element("select", "");
+  select.setAttribute("aria-label", "Сортировка по значению в статье");
+  for (const [value, label] of RESULT_SORTS) select.add(new Option(label, value));
+  select.value = filters.get("sort") ?? "";
+  select.addEventListener("change", () => {
+    const next = new URLSearchParams(filters);
+    if (select.value) next.set("sort", select.value);
+    else next.delete("sort");
+    location.hash = resultsRoute(next);
+  });
+  return element("label", "result-sort", element("span", "", "Значение в статье"), select);
+}
+
+function compareReportedValues(left, right, descending) {
+  const a = left.result.reported_value;
+  const b = right.result.reported_value;
+  if (!Number.isFinite(a)) return Number.isFinite(b) ? 1 : 0;
+  if (!Number.isFinite(b)) return -1;
+  return descending ? b - a : a - b;
+}
+
+async function requestResultsPage(filters, page, signal) {
+  const query = new URLSearchParams(filters);
+  const sort = query.get("sort");
+  query.delete("sort");
+  query.set("page", String(page));
+  if (!sort) return request(withQuery("/results", query), { signal });
+
+  query.set("page_size", String(SORT_FETCH_SIZE));
+  const fetchPage = (number) => {
+    const parameters = new URLSearchParams(query);
+    parameters.set("page", String(number));
+    return request(withQuery("/results", parameters), { signal });
+  };
+  const first = await fetchPage(1);
+  const pages = Math.ceil(first.total / first.page_size);
+  const rows = new Map(first.items.map((item) => [item.result.result_id, item]));
+  for (let next = 2; next <= pages; next += SORT_FETCH_CONCURRENCY) {
+    const length = Math.min(SORT_FETCH_CONCURRENCY, pages - next + 1);
+    const batch = await Promise.all(Array.from({ length }, (_, index) => fetchPage(next + index)));
+    for (const resultPage of batch) {
+      for (const item of resultPage.items) rows.set(item.result.result_id, item);
+    }
+  }
+  if (rows.size !== first.total) throw new Error("Список изменился во время сортировки. Повторите запрос.");
+  const sorted = [...rows.values()].sort((a, b) => compareReportedValues(a, b, sort === "desc"));
+  const start = (page - 1) * RESULT_PAGE_SIZE;
+  return { items: sorted.slice(start, start + RESULT_PAGE_SIZE), page, page_size: RESULT_PAGE_SIZE, total: sorted.length };
 }
 
 function showResults(screen, params) {
@@ -542,27 +617,29 @@ function showResults(screen, params) {
   const page = pageNumber(params);
   const id = filters.get("document_id");
   const reset = resultsRoute(id ? { document_id: id } : {});
-  const hasResultFilters = filters.size > (id ? 1 : 0);
+  const hasResultFilters = FILTER_NAMES.some((name) => name !== "document_id" && filters.has(name));
   const from = resultsRoute(filters, page);
   const scope = element("div", "document-scope");
-  const count = element("span", "section-count");
+  const count = element("span", "results-count");
+  count.setAttribute("aria-live", "polite");
   const list = element("div", "panel list-panel");
   const heading = screenHeading("Результаты");
-  const section = element("section", "workspace-section", sectionHeading("Извлечённые результаты", count), list);
+  const section = element("section", "workspace-section",
+    element("div", "results-toolbar", reviewFilters(filters, from),
+      element("div", "results-controls", count, resultSort(filters))), list);
+  section.setAttribute("aria-label", "Список результатов");
   WORKSPACE.append(heading);
   if (id) WORKSPACE.append(scope);
-  WORKSPACE.append(renderFilters(filters, hasResultFilters ? reset : null, load), section);
+  WORKSPACE.append(renderFilters(filters, hasResultFilters || filters.has("sort") ? reset : null, load), section);
 
   let loading = false;
   async function load() {
     if (loading || screen.signal.aborted) return;
     loading = true;
-    const query = new URLSearchParams(filters);
-    query.set("page", String(page));
     count.textContent = "";
     list.replaceChildren(statePanel("Загружаем результаты…", null, null, "loading"));
     try {
-      const data = await request(withQuery("/results", query), { signal: screen.signal });
+      const data = await requestResultsPage(filters, page, screen.signal);
       if (screen.signal.aborted) return;
       count.textContent = totalLabel(data.total, ["результат", "результата", "результатов"]);
       if (data.items.length) {
@@ -595,7 +672,7 @@ function showResults(screen, params) {
       const { document: doc, data } = await request(endpoint("documents", id), { signal: screen.signal });
       if (screen.signal.aborted) return;
       scope.replaceChildren(element("div", "scope-bar panel",
-        element("div", "scope-identity", element("span", "field-label", "Документ"),
+        element("div", "scope-identity", element("span", "field-label", "Выбранная статья"),
           link(doc.original_filename, documentRoute(id), "document-name"),
           data?.publication?.title ? element("p", "muted", data.publication.title) : null),
         element("div", "action-group", statusBadge(doc.status), mockBadge(doc.extraction_mode),
@@ -686,7 +763,7 @@ function resultFilterLink(name, id, field, filters) {
 }
 
 function resultTable(items, from, filters) {
-  const labels = ["Выбор", "Метрика", "Конфигурация", "Датасет", "В статье", "Нормализовано", "Замечания"];
+  const labels = ["Сравнить", "Метрика", "Конфигурация", "Датасет", "В статье", "Нормализовано", "Замечания"];
   const header = element("tr", "", ...labels.map((label) => {
     const cell = element("th", "", label);
     cell.scope = "col";
@@ -775,12 +852,12 @@ function renderTray() {
     return;
   }
   const heading = element("div", "tray-title", element("span", "", "Сравнение"),
-    element("span", "mono", `${selection.length} / 2`));
+    element("span", "tray-count", `Выбрано ${selection.length} из 2`));
   const slots = element("div", "tray-slots");
   const from = currentScreen?.resultsBack ?? "#results";
   for (const [index, side] of ["A", "B"].entries()) {
     const entry = selection[index];
-    const slot = element("div", "tray-slot", element("span", "side-key mono", side));
+    const slot = element("div", entry ? "tray-slot" : "tray-slot tray-slot-empty", element("span", "side-key mono", side));
     if (entry) {
       const title = link(entry.context ? `${entry.metric} · ${entry.context}` : entry.metric, resultRoute(entry.id, from), "tray-result");
       title.title = title.textContent;
@@ -791,12 +868,12 @@ function renderTray() {
       remove.setAttribute("aria-label", `Убрать результат ${side} из сравнения`);
       slot.append(title, mockBadge(entry.mode), remove);
     } else {
-      slot.append(element("span", "muted", "Выберите результат"));
+      slot.append(element("span", "muted", "Выберите второй результат"));
     }
     slots.append(slot);
   }
   const compare = selection.length === 2
-    ? link("Сравнить", route("compare", { left: selection[0].id, right: selection[1].id, from }), "button button-primary")
+    ? link("Сравнить результаты", route("compare", { left: selection[0].id, right: selection[1].id, from }), "button button-primary")
     : element("button", "button button-primary", "Сравнить");
   if (compare instanceof HTMLButtonElement) {
     compare.type = "button";

@@ -80,7 +80,11 @@ class BatchTest(unittest.TestCase):
 
             def respond(self):
                 size = int(self.headers.get("Content-Length", 0))
-                status, body = route(self.command, urlsplit(self.path), self.headers, self.rfile.read(size))
+                response = route(self.command, urlsplit(self.path), self.headers, self.rfile.read(size))
+                if response is None:
+                    self.close_connection = True
+                    return
+                status, body = response
                 payload = json.dumps(body).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
@@ -112,9 +116,11 @@ class BatchTest(unittest.TestCase):
             tasks=[{"task_id": "t1", "task_type": "question answering"}],
             experiments=[{"experiment_id": "e1", "latency_ms": 0}],
             results=[
-                {"result": result, "normalized": {"value": 0, "unit": "fraction"}, "baseline": {"value": 0, "unit": "fraction"}},
-                {"result": dict(result, result_id="r2", duplicate_of="r1"), "normalized": {"value": 0, "unit": "fraction"}},
-                {"result": {"result_id": "r3", "result_origin": "cited", "cited_publication_id": "[1]",
+                {"extraction_mode": "python", "result": result,
+                 "normalized": {"value": 0, "unit": "fraction"}, "baseline": {"value": 0, "unit": "fraction"}},
+                {"extraction_mode": "python", "result": dict(result, result_id="r2", duplicate_of="r1"),
+                 "normalized": {"value": 0, "unit": "fraction"}},
+                {"extraction_mode": "python", "result": {"result_id": "r3", "result_origin": "cited", "cited_publication_id": "[1]",
                             "raw_value": "7", "reported_value": 7}, "normalized": None},
             ],
             evidence=[
@@ -183,6 +189,34 @@ class BatchTest(unittest.TestCase):
                         "D003: missing document", "duplicate corpus_id", "D004: unexpected document", "missing data"):
             self.assertIn(message, err)
         self.assertFalse(self.output.exists())
+
+    def test_convert_requires_explicit_python_mode_on_each_result(self):
+        included = detail(included=True)
+        for mode in (None, "mock"):
+            with self.subTest(mode=mode):
+                summary = {"result": {"result_id": "r1"}}
+                if mode is not None:
+                    summary["extraction_mode"] = mode
+                included["data"]["results"] = [summary]
+                code, _, err = self.cli("convert", self.export(included))
+                self.assertEqual(1, code)
+                self.assertIn(f"result with extraction_mode={mode!r}", err)
+                self.assertFalse(self.output.exists())
+
+    def test_convert_rejects_result_rows_for_excluded_publications(self):
+        for mode in (None, "mock", "python"):
+            with self.subTest(mode=mode):
+                self.output = self.root / f"excluded-{mode}"
+                excluded = detail("D002")
+                summary = {"result": {"result_id": "r1"}}
+                if mode is not None:
+                    summary["extraction_mode"] = mode
+                excluded["data"]["results"] = [summary]
+                code, _, err = self.cli("convert", self.export(excluded))
+                self.assertEqual(1, code)
+                self.assertIn("D002 (doc_D002)", err)
+                self.assertIn("excluded publication has result rows", err)
+                self.assertFalse(self.output.exists())
 
     def test_single_document_detail_and_existing_output(self):
         path = self.root / "detail.json"
@@ -257,6 +291,73 @@ class BatchTest(unittest.TestCase):
         self.assertIn("not_found: Missing job", err)
         code, _, err = self.cli("resume", "D001", "--document-id", "D001=doc_chosen", "--api-url", api)
         self.assertEqual(0, code, err)
+
+    def test_temporary_status_errors_recover_without_reuploading(self):
+        (self.root / "D001.pdf").write_bytes(b"%PDF-1.7\nsynthetic bytes")
+        requests = []
+        finished = detail()
+
+        def route(method, url, *_):
+            requests.append((method, url.path))
+            if method == "POST":
+                return 202, dict(finished["document"], status="queued")
+            if len(requests) == 2:
+                return None
+            if len(requests) == 3:
+                return 503, {"error": {"code": "unavailable"}}
+            return 200, finished
+
+        api = self.api(route)
+        code, _, err = self.cli("run", self.root, "--api-url", api, "--timeout", 5)
+        self.assertEqual(0, code, err)
+        self.assertEqual([("POST", "/api/v1/documents"), *[("GET", "/api/v1/documents/doc_D001")] * 3], requests)
+        self.assertEqual("D001", self.csv("publications")[0]["publication_id"])
+
+    def test_resume_recovers_from_temporary_document_list_error(self):
+        requests = []
+        finished = detail()
+
+        def route(method, url, *_):
+            requests.append((method, url.path))
+            if len(requests) == 1:
+                return 503, {}
+            if url.path == "/api/v1/documents":
+                return 200, {"items": [finished["document"]], "total": 1}
+            return 200, finished
+
+        code, _, err = self.cli("resume", "D001", "--api-url", self.api(route))
+        self.assertEqual(0, code, err)
+        self.assertEqual([("GET", "/api/v1/documents")] * 2 + [("GET", "/api/v1/documents/doc_D001")], requests)
+
+    def test_upload_failure_is_never_retried(self):
+        (self.root / "D001.pdf").write_bytes(b"%PDF-1.7\nsynthetic bytes")
+        requests = []
+
+        def route(method, *_):
+            requests.append(method)
+            return 504, {}
+
+        code, _, err = self.cli("run", self.root, "--api-url", self.api(route))
+        self.assertEqual(1, code)
+        self.assertEqual(["POST"], requests)
+        self.assertIn("HTTP 504", err)
+        self.assertIn("run --resume", err)
+        self.assertFalse(self.output.exists())
+
+    def test_retry_delay_must_fit_into_the_wait_budget(self):
+        requests = []
+
+        def route(method, *_):
+            requests.append(method)
+            return 503, {}
+
+        code, _, err = self.cli("resume", "D001", "--document-id", "D001=doc_D001",
+                                "--api-url", self.api(route), "--timeout", 0.1)
+        self.assertEqual(1, code)
+        self.assertEqual(["GET"], requests)
+        self.assertIn("D001 (doc_D001)", err)
+        self.assertIn("HTTP 503", err)
+        self.assertFalse(self.output.exists())
 
     def test_timeout_includes_corpus_job_and_last_status(self):
         processing = detail(status="processing")

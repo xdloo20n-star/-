@@ -63,12 +63,17 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		if _, err := tx.ExecContext(ctx, initialSchema); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, "PRAGMA user_version = 1"); err != nil {
+	case 1:
+		if err := refreshStoredBaselines(ctx, tx); err != nil {
 			return err
 		}
-	case 1:
+	case 2:
+		return tx.Commit()
 	default:
 		return fmt.Errorf("unsupported database version %d", version)
+	}
+	if _, err := tx.ExecContext(ctx, "PRAGMA user_version = 2"); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

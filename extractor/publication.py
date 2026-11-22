@@ -111,10 +111,10 @@ class Payload:
         return record_id
 
     def cite(self, kind: str, record_id: str, attribute: str | None, page: Page,
-             fragment: str, **locator: str) -> None:
+             fragment: str, **locator: Any) -> None:
         if fragment and (fragment in page.text or fragment in page.reading_text):
             verification = page.verification
-        elif locator.get("table"):
+        elif locator.get("table") or locator.get("figure") or locator.get("bbox"):
             verification = "locator_only"
             fragment = ""
         else:
@@ -471,7 +471,7 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
         datasets[dataset_key] = dataset_id, task_id, experiment_id
 
     parent_name = ""
-    for row, values in table.rows:
+    for row_index, (row, values) in enumerate(table.rows):
         row_locator = f"{table.row_section} / {row}" if table.row_section else row
         if row.startswith(("-", "–", "—")) and parent_name:
             config_name = f"{parent_name} / {row}"
@@ -483,7 +483,9 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
         if table.family == "benchmark_distribution":
             config_name = None
         configurations = {}
-        for column, raw in zip(table.columns, values, strict=True):
+        for column_index, (column, raw) in enumerate(zip(table.columns, values, strict=True)):
+            if raw is None:
+                continue
             generator = column.generator
             configuration_key = generator, column.generator_version
             if configuration_key not in configurations:
@@ -533,8 +535,13 @@ def add_table(payload: Payload, table: Table, question_answering: bool,
                 column_title = f"{row} / {header.label}"
             if column.source_label:
                 column_title = column.source_label
-            payload.cite("result", result_id, "raw_value", table.page, raw,
-                         table_row=column.original_row or row_locator, table_column=column_title, **source)
+            bbox = table.value_bboxes[row_index][column_index] if table.value_bboxes else None
+            # A bounded OCR pass has its own coordinates. Whole-page OCR can
+            # merge the digits with a neighbor or recognize a different number.
+            fragment = "" if bbox and table.page.verification == "ocr_match" else raw
+            payload.cite("result", result_id, "raw_value", table.page, fragment,
+                         table_row=column.original_row or row_locator, table_column=column_title,
+                         **({"bbox": bbox} if bbox else {}), **source)
             if column.metric_variant_evidence:
                 variant_page, variant_text = column.metric_variant_evidence
                 locator = ({**source, "table_row": column.original_row or row_locator, "table_column": column_title}

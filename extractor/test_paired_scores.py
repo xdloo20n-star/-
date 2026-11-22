@@ -3,7 +3,7 @@ import unittest
 from pdf_pages import PDF, Page
 from publication import extract_publication
 from rag_tables import read_tables
-from test_grouped_scores import BACKBONE_GRID
+from test_grouped_scores import ADJACENT_GRIDS, BACKBONE_GRID
 
 
 # PRO-Step, PDF page 18, Tables 10 and 11.
@@ -58,6 +58,21 @@ MuSiQue      1.24 / 6.27   8.07 / 14.27    10.38* / 19.85*     Table 20: Final E
 Average      4.01 / 14.35 26.22 / 33.51      31.04 / 40.00      k.
 """
 
+ROUNDED_MAIN_GRID = """Table 1: Comparison of different RAG methods across 5 benchmarks using EM and F1 metrics.
+
+                    PopQA          HotpotQA              2WikiMulti          Bamboogle       MuSiQue        Average
+Method
+                   EM       F1      EM         F1        EM       F1         EM      F1      EM      F1     EM     F1
+Direct            40.4     47.0    38.0    51.2          44.0     51.3       36.7    47.5    12.4    22.3   34.4   44.0
+PRO-S TEP         40.5     47.4    38.7    51.6          44.1     51.4       36.8    47.6    12.5    22.4   34.5   44.1
+"""
+
+ROUNDED_ABLATION = ADJACENT_GRIDS.replace(
+    "PRM component ablation.", "Component ablation study evaluating the impact of the Process Reward Model (PRM).",
+).replace("Optimization strategies.", "Impact of different optimization strategies on PRO-S TEP’s effectiveness.") + (
+    "PRO-S TEP (DPO)          40.5    47.4   38.7    51.6       44.1     51.4    36.8    47.6   12.5   22.4   34.5   44.1\n"
+)
+
 
 class PairedScoreTest(unittest.TestCase):
     def extract_pages(self, *pages):
@@ -107,6 +122,40 @@ instruction-tuned backbone.""")
         shared_setting_unknown = self.extract_pages(main, margin, Page(21, REGEN_GRID, "text_match"))
         _, main_regen, _, _ = self.result_at(shared_setting_unknown, "Table 23", "outcome filter main", "PopQA / EM")
         self.assertIsNone(main_regen.get("duplicate_of"))
+
+    def test_selected_prm_weight_repeats_the_identical_instruction_tuned_scores(self):
+        main = Page(9, BACKBONE_GRID, "text_match", """Our main experiments use Qwen2.5-7B-Instruct as
+the policy backbone. The score is 34.51 / 44.09 for the main instruction-tuned backbone.""")
+        page = Page(18, PAIR_GRIDS, "text_match")
+        payload = self.extract_pages(main, page)
+        _, original, _, _ = self.result_at(payload, "Table 4", "Qwen2.5-7B Base/Instruct / PRO-S TEP-Instruct",
+                                           "2WikiMulti / F1")
+        source, repeated, config, _ = self.result_at(payload, "Table 11", "0.3 ⋆", "2WikiMultiHopQA / F1")
+        self.assertEqual((repeated["metric_name"], repeated["raw_value"], repeated.get("duplicate_of"),
+                          config["generator_model"], source["page"], source["verification"]),
+                         ("F1", "51.43", original["result_id"], "Qwen2.5-7B-Instruct", 18, "text_match"))
+        for text in (PAIR_GRIDS.replace("selected configuration", "highest score"), PAIR_GRIDS.replace("51.43", "51.44")):
+            with self.subTest(text=text):
+                unmatched = self.extract_pages(main, Page(18, text, "text_match"))
+                _, result, _, _ = self.result_at(unmatched, "Table 11", "0.3 ⋆", "2WikiMultiHopQA / F1")
+                self.assertIsNone(result.get("duplicate_of"))
+
+    def test_main_ablation_rows_repeat_the_source_grid_only_with_equal_printed_scores(self):
+        main = Page(5, ROUNDED_MAIN_GRID, "text_match", "The main results comparing PRO-S TEP with baseline methods "
+                    "across five datasets are presented in Table 1.")
+        ablations = Page(6, ROUNDED_ABLATION, "text_match", "PRO-S TEP (DPO) is our default approach.")
+        branches = Page(18, PAIR_GRIDS, "text_match")
+        payload = self.extract_pages(main, ablations, branches)
+        _, original, _, _ = self.result_at(payload, "Table 1", "PRO-S TEP", "PopQA / EM")
+        for table, row in (("Table 2", "PRO-S TEP"), ("Table 3", "PRO-S TEP (DPO)"),
+                           ("Table 10", "Main configuration (K = 3)")):
+            source, repeat, condition, _ = self.result_at(payload, table, row, "PopQA / EM")
+            self.assertEqual((repeat["metric_name"], repeat["raw_value"], repeat.get("duplicate_of"),
+                              condition["rag_variant"], source["verification"]),
+                             ("EM", "40.5", original["result_id"], "PRO-S TEP", "text_match"))
+        changed = self.extract_pages(main, Page(6, ROUNDED_ABLATION.replace("51.4", "51.5"), "text_match"))
+        _, row, _, _ = self.result_at(changed, "Table 2", "PRO-S TEP", "PopQA / EM")
+        self.assertIsNone(row.get("duplicate_of"))
 
     def test_paired_delta_uses_the_displayed_subtraction(self):
         payload = self.extract_pages(Page(9, BACKBONE_GRID, "text_match"), Page(21, REGEN_GRID, "text_match"))

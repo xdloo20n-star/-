@@ -35,6 +35,15 @@ MAIN_BACKBONE = re.compile(r"\bmain\s+experiments\s+use\s+([\w.-]+-Instruct)\s+a
 MAIN_AVERAGE = re.compile(rf"({DECIMAL.pattern})\s*/\s*({DECIMAL.pattern})\s+for\s+the\s+main\s+instruction-tuned\s+backbone\b", re.I)
 MAIN_FILTER = re.compile(r"\bthe same outcome-margin filter\b.{0,150}\bas in our main pipeline\b", re.I | re.S)
 WITH_MARGIN_FILTER = re.compile(r"(.+)\s+\(with margin filter\)", re.I)
+PRM_WEIGHT_SWEEP = re.compile(r"\bProcess Reward Model \(PRM\) weight \(α\)", re.I)
+SELECTED_SETTING = re.compile(r"([⋆*]) denotes the selected configuration\b", re.I)
+MAIN_TABLE = re.compile(r"\bthe main results comparing ([\w -]+?) with baseline methods across \w+ datasets are presented in\s+"
+                        r"(Table \d+)\b", re.I)
+DEFAULT_OPTIMIZER = re.compile(r"([\w-]+(?: [\w-]+)?) \(([A-Z]+)\) is our default approach\b", re.I)
+PRM_ABLATION = re.compile(r"\bcomponent ablation study evaluating the impact of the Process Reward Model\b", re.I)
+OPTIMIZER_ABLATION = re.compile(r"\bimpact of different optimization strategies\b", re.I)
+BRANCH_ABLATION = re.compile(r"\bablation of the VTS branching configuration\b", re.I)
+BRANCH_MAIN = re.compile(r"main configuration \(K\s*=\s*\d+\)", re.I)
 
 
 def read_paired_scores(page: Page, lines: list[str], occupied: set[str]) -> list[Table]:
@@ -138,6 +147,7 @@ def score_order(caption: str, rows: list[tuple[str, list[str]]]) -> tuple[tuple[
 
 def read_additional_score_tables(pages: list[Page], known_tables: list[Table]) -> list[Table]:
     """Resolve layouts that need a second table as evidence or have different axes."""
+    from classifier_tables import read_classifier_tables
     from recovery_scores import read_recovery_scores
 
     occupied = {(table.page.number, table.label.casefold()) for table in known_tables}
@@ -146,6 +156,8 @@ def read_additional_score_tables(pages: list[Page], known_tables: list[Table]) -
         grid = read_unlabeled_pairs(page, label, index, region, known_tables)
         transposed = read_transposed_pairs(page, label, index, region)
         tables.extend(grid or transposed)
+    occupied.update((table.page.number, table.label.casefold()) for table in tables)
+    tables += read_classifier_tables(pages, occupied)
     occupied.update((table.page.number, table.label.casefold()) for table in tables)
     return tables + read_recovery_scores(pages, occupied)
 
@@ -344,6 +356,7 @@ def read_transposed_pairs(page: Page, label: str, start: int, lines: list[str]) 
 
 def enrich_repeated_score_rows(pages: list[Page], tables: list[Table]) -> list[Table]:
     """Link exact copies of a benchmark row when the PDF identifies the same main setting."""
+    tables = link_main_ablation_rows(pages, tables)
     backbone = native_evidence(pages, MAIN_BACKBONE)
     main_average = native_evidence(pages, MAIN_AVERAGE)
     if not (backbone and main_average):
@@ -366,26 +379,66 @@ def enrich_repeated_score_rows(pages: list[Page], tables: list[Table]) -> list[T
     for table in tables:
         if table.family != "grouped_scores" or table is reference:
             continue
+        selected = SELECTED_SETTING.search(table.caption) if PRM_WEIGHT_SWEEP.search(table.caption) else None
+        selected_rows = [row for row, _ in table.rows if selected and row.endswith(f" {selected[1]}")]
         for row, values in table.rows:
             margin = WITH_MARGIN_FILTER.fullmatch(row)
             condition = (margin and row.startswith(method.removesuffix("-Instruct"))
                          and "outcome-margin filter" in table.caption.casefold()) or (
                              same_filter and row.casefold() == "outcome filter main"
-                             and "regen-augmented variant" in table.caption.casefold())
+                             and "regen-augmented variant" in table.caption.casefold()) or selected_rows == [row]
             if condition and score_cells(table.columns, values) == reference_scores:
                 candidates.append((table, row))
     if not candidates:
         return tables
+    return tag_repeated_rows(tables, reference, method, candidates, scope, name, model, backbone)
+
+
+def link_main_ablation_rows(pages: list[Page], tables: list[Table]) -> list[Table]:
+    if not (statement := native_evidence(pages, MAIN_TABLE)):
+        return tables
+    method, label = MAIN_TABLE.fullmatch(statement[1]).groups()
+    main = [(table, row, values) for table in tables if table.family == "grouped_scores" and table.label == label
+            for row, values in table.rows if row == method]
+    if len(main) != 1:
+        return tables
+    reference, main_row, raw = main[0]
+    scores = score_cells(reference.columns, raw)
+    optimizer = native_evidence(pages, DEFAULT_OPTIMIZER)
+    default = DEFAULT_OPTIMIZER.fullmatch(optimizer[1]).groups() if optimizer else None
+    default_row = f"{default[0]} ({default[1]})" if default and default[0] == method else None
+    candidates = []
+    for table in tables:
+        if table.family != "grouped_scores" or table.page.number < reference.page.number or table is reference:
+            continue
+        for row, values in table.rows:
+            condition = (row == method and PRM_ABLATION.search(table.caption)) or (
+                row == default_row and OPTIMIZER_ABLATION.search(table.caption)) or (
+                BRANCH_MAIN.fullmatch(row) and BRANCH_ABLATION.search(table.caption))
+            if condition and score_cells(table.columns, values) == scores:
+                candidates.append((table, row))
+    if not candidates:
+        return tables
+    scope = reference.page.number, f"{reference.label} / {main_row}"
+    return tag_repeated_rows(tables, reference, main_row, candidates, scope, method)
+
+
+def tag_repeated_rows(tables: list[Table], reference: Table, method: str, candidates: list[tuple[Table, str]],
+                      scope: tuple[int, str], name: str, model: str | None = None,
+                      backbone: tuple[Page, str] | None = None) -> list[Table]:
+    reference_datasets = {dataset_key(column.dataset): column.dataset for column in reference.columns}
     repeated = {id(table): row for table, row in [(reference, method), *candidates]}
     enriched = []
     for table in tables:
         if not (duplicate_row := repeated.get(id(table))):
             enriched.append(table)
             continue
-        for row, values in table.rows:
-            single_row = replace(table, rows=[(row, values)])
+        for index, (row, values) in enumerate(table.rows):
+            bboxes = table.value_bboxes[index:index + 1] if table.value_bboxes else ()
+            single_row = replace(table, rows=[(row, values)], value_bboxes=bboxes)
             if row == duplicate_row:
                 columns = [replace(column, generator=model, generator_evidence=backbone, duplicate_scope=scope,
+                                   dataset=reference_datasets[dataset_key(column.dataset)],
                                    source_label=score_locator(column)) for column in table.columns]
                 single_row = replace(single_row, columns=columns, config_name=name)
             enriched.append(single_row)
@@ -393,8 +446,14 @@ def enrich_repeated_score_rows(pages: list[Page], tables: list[Table]) -> list[T
 
 
 def score_cells(columns: list[Column], values: list[str]) -> dict[tuple, str]:
-    return {(column.dataset, column.header.name, column.header.unit, column.aggregation): value
+    return {(dataset_key(column.dataset), column.header.name, column.header.unit, column.aggregation): value
             for column, value in zip(columns, values, strict=True)}
+
+
+def dataset_key(dataset: str | None) -> str | None:
+    if dataset and dataset.casefold() == "2wikimulti":
+        return "2wikimultihopqa"
+    return dataset.casefold() if dataset else None
 
 
 def score_locator(column: Column) -> str:

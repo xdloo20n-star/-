@@ -87,7 +87,7 @@ class Table:
     caption: str
     index: int
     columns: list[Column]
-    rows: list[tuple[str, list[str]]]
+    rows: list[tuple[str, list[str | None]]]
     row_section: str | None = None
     family: str | None = None
     config_name: str | None = None
@@ -96,6 +96,7 @@ class Table:
     top_k: int | None = None
     top_k_evidence: tuple[Page, str] | None = None
     task_type: str | None = None
+    value_bboxes: tuple[tuple[tuple[float, float, float, float] | None, ...], ...] = ()
 
 
 def headers(line: str) -> list[Header]:

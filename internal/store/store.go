@@ -30,7 +30,12 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	dsn := url.URL{Scheme: "file", Path: absolute}
+	uriPath := filepath.ToSlash(absolute)
+	if !strings.HasPrefix(uriPath, "/") {
+		// Keep Windows drive letters in the URI path.
+		uriPath = "/" + uriPath
+	}
+	dsn := url.URL{Scheme: "file", Path: uriPath}
 	pragmas := url.Values{"_pragma": {"busy_timeout(5000)", "foreign_keys(ON)", "journal_mode(WAL)"}}
 	dsn.RawQuery = pragmas.Encode()
 	db, err := sql.Open("sqlite", dsn.String())

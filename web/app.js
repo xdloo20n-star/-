@@ -1,7 +1,9 @@
 "use strict";
 
+const APP_NAME = "CBEPKA";
 const API = "/api/v1";
 const POLL_INTERVAL = 1600;
+const DOCUMENT_STATUS_RETRIES = 3;
 const SELECTION_KEY = "sverka.comparison.v1";
 const UNKNOWN = "не указано";
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
@@ -55,8 +57,11 @@ function documentRoute(id, follow = false) {
   return route("document", follow ? { id, follow: "1" } : { id });
 }
 
-function resultRoute(id, from) {
-  return route("result", from ? { id, from } : { id });
+function resultRoute(id, from, section) {
+  const entries = { id };
+  if (from) entries.from = from;
+  if (section) entries.section = section;
+  return route("result", entries);
 }
 
 function resultsRoute(query = {}, page = 1) {
@@ -88,13 +93,16 @@ async function request(path, options = {}) {
     });
   } catch (error) {
     if (error.name === "AbortError") throw error;
-    throw new Error("Не удалось связаться с сервером. Проверьте соединение.");
+    throw Object.assign(new Error("Не удалось связаться с сервером. Проверьте соединение."), { retryable: true });
   }
   const payload = await response.json().catch((error) => {
     if (error.name === "AbortError") throw error;
     return null;
   });
-  if (!response.ok) throw new Error(payload?.error?.message || `Сервер вернул ошибку ${response.status}.`);
+  if (!response.ok) {
+    const message = payload?.error?.message || `Сервер вернул ошибку ${response.status}.`;
+    throw Object.assign(new Error(message), { retryable: response.status >= 500 });
+  }
   if (!payload) throw new Error("Сервер вернул ответ без данных.");
   return payload;
 }
@@ -138,7 +146,7 @@ function statusBadge(status) {
   return element("span", `badge badge-status status-${status}`, element("span", "status-dot"), STATUS_LABELS[status]);
 }
 
-function pdfLink(fileUrl, label, page) {
+function pdfURL(fileUrl, page) {
   if (!fileUrl) return null;
   let url;
   try {
@@ -151,6 +159,12 @@ function pdfLink(fileUrl, label, page) {
     if (!Number.isSafeInteger(page) || page < 1) return null;
     url.hash = `page=${page}`;
   }
+  return url;
+}
+
+function pdfLink(fileUrl, label, page) {
+  const url = pdfURL(fileUrl, page);
+  if (!url) return null;
   const anchor = link(label, url.href, "button button-secondary pdf-link");
   anchor.target = "_blank";
   anchor.rel = "noopener noreferrer";
@@ -392,7 +406,7 @@ function documentMessages(data) {
   const publication = data?.publication;
   const pages = data?.source_document?.unreadable_pages ?? [];
   if (publication?.in_scope === false) {
-    messages.push(element("div", "callout callout-warning", element("strong", "", "Статья вне области Сверки"),
+    messages.push(element("div", "callout callout-warning", element("strong", "", `Статья вне области ${APP_NAME}`),
       element("p", "", valueOrUnknown(publication.exclusion_reason))));
   }
   if (pages.length) {
@@ -416,20 +430,25 @@ function showDocument(screen, params) {
 
   let timer;
   let lastStatus;
+  let statusFailures = 0;
   screen.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
 
   async function load(showLoading = false) {
-    if (showLoading) body.replaceChildren(statePanel("Получаем статус…", null, null, "loading"));
+    if (showLoading) {
+      statusFailures = 0;
+      body.replaceChildren(statePanel("Получаем статус…", null, null, "loading"));
+    }
     try {
       const { document: doc, data } = await request(endpoint("documents", id), { signal: screen.signal });
       if (screen.signal.aborted) return;
+      statusFailures = 0;
       if (follow && doc.status === "completed" && data?.publication?.in_scope === true) {
         location.replace(resultsRoute({ document_id: id }));
         return;
       }
       if (doc.status !== lastStatus || showLoading) {
         heading.querySelector("h1").textContent = doc.original_filename;
-        document.title = `${doc.original_filename} · Сверка`;
+        document.title = `${doc.original_filename} · ${APP_NAME}`;
         const actions = element("div", "action-group", pdfLink(doc.file_url, "Открыть PDF"));
         if (doc.status === "completed") actions.append(documentExport(id));
         if (doc.status === "completed" && data?.publication?.in_scope === true) {
@@ -451,7 +470,13 @@ function showDocument(screen, params) {
       }
       if (ACTIVE_STATUSES.has(doc.status)) timer = setTimeout(load, POLL_INTERVAL);
     } catch (error) {
-      if (!screen.signal.aborted) loadFailure(body, "Не удалось получить статус", error, () => load(true));
+      if (screen.signal.aborted) return;
+      if ((follow || ACTIVE_STATUSES.has(lastStatus)) && error.retryable && statusFailures < DOCUMENT_STATUS_RETRIES) {
+        statusFailures += 1;
+        timer = setTimeout(load, POLL_INTERVAL * statusFailures);
+        return;
+      }
+      loadFailure(body, "Не удалось получить статус", error, () => load(true));
     }
   }
 
@@ -480,7 +505,7 @@ function filterInput(name, label, filters, placeholder, type = "text") {
   return element("label", "filter-field", element("span", "", label), input);
 }
 
-function renderFilters(filters, reload) {
+function renderFilters(filters, resetHref, reload) {
   const issues = element("select", "");
   issues.name = "has_issues";
   for (const [value, title] of [["", "Все"], ["true", "Есть замечания"], ["false", "Без замечаний"]]) {
@@ -490,7 +515,7 @@ function renderFilters(filters, reload) {
 
   const submit = element("button", "button button-primary", "Применить");
   submit.type = "submit";
-  const reset = filters.size ? link("Сбросить", "#results", "text-link filter-reset") : null;
+  const reset = resetHref ? link("Сбросить", resetHref, "text-link filter-reset") : null;
   const form = element("form", "panel filters",
     element("div", "filter-main", filterInput("q", "Поиск", filters, "Статья, датасет", "search"),
       filterInput("metric_name", "Метрика", filters, "Recall@5"),
@@ -516,6 +541,8 @@ function showResults(screen, params) {
   const filters = resultFilters(params);
   const page = pageNumber(params);
   const id = filters.get("document_id");
+  const reset = resultsRoute(id ? { document_id: id } : {});
+  const hasResultFilters = filters.size > (id ? 1 : 0);
   const from = resultsRoute(filters, page);
   const scope = element("div", "document-scope");
   const count = element("span", "section-count");
@@ -524,7 +551,7 @@ function showResults(screen, params) {
   const section = element("section", "workspace-section", sectionHeading("Извлечённые результаты", count), list);
   WORKSPACE.append(heading);
   if (id) WORKSPACE.append(scope);
-  WORKSPACE.append(renderFilters(filters, load), section);
+  WORKSPACE.append(renderFilters(filters, hasResultFilters ? reset : null, load), section);
 
   let loading = false;
   async function load() {
@@ -539,12 +566,11 @@ function showResults(screen, params) {
       if (screen.signal.aborted) return;
       count.textContent = totalLabel(data.total, ["результат", "результата", "результатов"]);
       if (data.items.length) {
-        list.replaceChildren(resultTable(data.items, from));
+        list.replaceChildren(resultTable(data.items, from, filters));
       } else if (data.total > 0) {
         list.replaceChildren(statePanel("На этой странице нет результатов", null,
           link("К первой странице", resultsRoute(filters), "button button-secondary")));
-      } else if ([...filters.keys()].some((key) => key !== "document_id")) {
-        const reset = id ? resultsRoute({ document_id: id }) : "#results";
+      } else if (hasResultFilters) {
         list.replaceChildren(statePanel("По фильтрам ничего не найдено", "Измените запрос или сбросьте фильтры.",
           link("Сбросить фильтры", reset, "button button-secondary")));
       } else if (id) {
@@ -572,7 +598,8 @@ function showResults(screen, params) {
         element("div", "scope-identity", element("span", "field-label", "Документ"),
           link(doc.original_filename, documentRoute(id), "document-name"),
           data?.publication?.title ? element("p", "muted", data.publication.title) : null),
-        element("div", "action-group", statusBadge(doc.status), mockBadge(doc.extraction_mode), documentExport(id)),
+        element("div", "action-group", statusBadge(doc.status), mockBadge(doc.extraction_mode),
+          documentExport(id), link("Все результаты", "#results", "text-link")),
       ), ...documentMessages(data));
       if (doc.failure) scope.append(element("div", "callout callout-error", doc.failure.message));
     } catch (error) {
@@ -637,9 +664,11 @@ function rawCell(result) {
     status ? element("span", "value-note", status) : null);
 }
 
-function issueCount(count) {
-  const badge = element("span", `issue-count mono${count > 0 ? " has-issues" : ""}`, INTEGER_FORMAT.format(count));
-  badge.setAttribute("aria-label", totalLabel(count, ["замечание", "замечания", "замечаний"]));
+function issueCount(count, href) {
+  const label = totalLabel(count, ["замечание", "замечания", "замечаний"]);
+  const number = INTEGER_FORMAT.format(count);
+  const badge = count > 0 ? link(number, href, "issue-count mono has-issues") : element("span", "issue-count mono", number);
+  badge.setAttribute("aria-label", count > 0 ? `Открыть замечания (${label})` : label);
   return badge;
 }
 
@@ -649,7 +678,14 @@ function tableCell(label, ...content) {
   return cell;
 }
 
-function resultTable(items, from) {
+function resultFilterLink(name, id, field, filters) {
+  if (!name || !id || filters.get(field) === id) return valueOrUnknown(name);
+  const next = new URLSearchParams(filters);
+  next.set(field, id);
+  return link(name, resultsRoute(next), "text-link");
+}
+
+function resultTable(items, from, filters) {
   const labels = ["Выбор", "Метрика", "Конфигурация", "Датасет", "В статье", "Нормализовано", "Замечания"];
   const header = element("tr", "", ...labels.map((label) => {
     const cell = element("th", "", label);
@@ -659,17 +695,26 @@ function resultTable(items, from) {
   const body = element("tbody", "");
   for (const row of items) {
     const result = row.result;
+    const source = link("К источнику", resultRoute(result.result_id, from, "source"), "text-link result-source-link");
+    const sourceLabel = `К источнику метрики ${result.metric_name}`;
+    if (row.extraction_mode === "python") {
+      source.target = "_blank";
+      source.rel = "noopener noreferrer";
+      source.setAttribute("aria-label", `${sourceLabel} в новой вкладке`);
+    } else {
+      source.setAttribute("aria-label", sourceLabel);
+    }
     body.append(element("tr", "",
       tableCell(labels[0], pickResult(row)),
       tableCell(labels[1], element("div", "metric-cell",
         link(result.metric_name, resultRoute(result.result_id, from), "metric-link"),
         result.metric_variant ? element("span", "value-note", result.metric_variant) : null,
-        mockBadge(row.extraction_mode))),
-      tableCell(labels[2], valueOrUnknown(row.configuration_name)),
-      tableCell(labels[3], valueOrUnknown(row.dataset_name)),
+        mockBadge(row.extraction_mode), source)),
+      tableCell(labels[2], resultFilterLink(row.configuration_name, result.config_id, "config_id", filters)),
+      tableCell(labels[3], resultFilterLink(row.dataset_name, result.dataset_id, "dataset_id", filters)),
       tableCell(labels[4], rawCell(result)),
       tableCell(labels[5], row.normalized ? element("span", "mono normalized-value", measured(row.normalized)) : element("span", "muted", UNKNOWN)),
-      tableCell(labels[6], issueCount(row.issue_count)),
+      tableCell(labels[6], issueCount(row.issue_count, resultRoute(result.result_id, from, "issues"))),
     ));
   }
   return element("table", "results-table", element("caption", "visually-hidden", "Таблица извлечённых результатов"),
@@ -795,6 +840,24 @@ const VERIFICATION = {
   text_match: "Текст совпал", ocr_match: "Текст совпал после OCR",
   locator_only: "Требует сверки", unverified: "Требует сверки",
 };
+const CONFIRMED_EVIDENCE = new Set(["text_match", "ocr_match"]);
+
+function sourceNeedsReview(evidence, mode) {
+  return mode !== "mock" && !CONFIRMED_EVIDENCE.has(evidence.verification);
+}
+
+function confirmedValuePDF(detail, doc) {
+  if (detail.extraction_mode !== "python" || doc?.extraction_mode !== "python") return null;
+  const evidence = detail.evidence.find((source) => source.entity_type === "result"
+    && source.entity_id === detail.result.result_id && source.field === "raw_value"
+    && CONFIRMED_EVIDENCE.has(source.verification) && Number.isSafeInteger(source.page) && source.page > 0);
+  return evidence ? pdfURL(doc.file_url, evidence.page) : null;
+}
+
+function focusReviewTarget(target, block = "start") {
+  target.focus({ preventScroll: true });
+  target.scrollIntoView({ block });
+}
 
 function fieldList(entries, className = "field-list") {
   return element("dl", className, ...entries.map(([label, value]) =>
@@ -812,16 +875,17 @@ function entityDetails(title, entity, labels) {
 
 function sourceCard(evidence, context, index) {
   const mock = context.mode === "mock";
+  const needsReview = sourceNeedsReview(evidence, context.mode);
   const target = context.allowPageLinks ? pdfLink(context.fileUrl, "Открыть страницу PDF", evidence.page) : null;
   const verification = mock ? mockBadge("mock") : element("span",
-    `badge ${["text_match", "ocr_match"].includes(evidence.verification) ? "badge-success" : "badge-warning"}`,
+    `badge ${needsReview ? "badge-warning" : "badge-success"}`,
     VERIFICATION[evidence.verification] ?? "Требует сверки");
   const entity = ENTITY_LABELS[evidence.entity_type] ?? evidence.entity_type;
   const field = Object.hasOwn(EVIDENCE_FIELDS[evidence.entity_type] ?? {}, evidence.field)
     ? EVIDENCE_FIELDS[evidence.entity_type][evidence.field] : evidence.field;
   const coordinates = [["Таблица", evidence.table], ["Строка", evidence.table_row], ["Столбец", evidence.table_column],
     ["Рисунок", evidence.figure], ["Раздел", evidence.section]].filter(([, value]) => value != null);
-  const card = element("article", "source-card",
+  const card = element("article", needsReview ? "source-card needs-review" : "source-card",
     element("div", "source-head",
       element("div", "source-title", element("h3", "", `Источник ${index + 1}`),
         element("span", "muted", field ? `${entity} · ${field}` : entity)), verification),
@@ -838,7 +902,9 @@ function sourceCard(evidence, context, index) {
 }
 
 function renderIssues(issues, sourceNodes, from) {
-  const section = element("section", "workspace-section review-checks", sectionHeading("Проверки", element("span", "section-count mono", issues.length)));
+  const section = element("section", "workspace-section review-checks", sectionHeading("Замечания", element("span", "section-count mono", issues.length)));
+  section.tabIndex = -1;
+  section.setAttribute("aria-label", "Замечания");
   const panel = element("div", "panel");
   section.append(panel);
   if (!issues.length) {
@@ -850,10 +916,7 @@ function renderIssues(issues, sourceNodes, from) {
     const sources = issue.evidence_ids.map((id) => {
       const source = sourceNodes.get(id);
       if (!source) return element("span", "muted mono", `Недоступен: ${id}`);
-      return button(`К источнику ${source.number}`, "text-link source-jump", () => {
-        source.node.focus({ preventScroll: true });
-        source.node.scrollIntoView({ block: "nearest" });
-      });
+      return button(`К источнику ${source.number}`, "text-link source-jump", () => focusReviewTarget(source.node, "nearest"));
     });
     const related = issue.result_ids.map((id) => link(id, resultRoute(id, from), "text-link mono"));
     list.append(element("li", "issue-item",
@@ -895,12 +958,15 @@ function renderResultDetail(detail, docDetail, docError, from, reload) {
     if (related.has(source.evidence_id) && !evidence.has(source.evidence_id)) evidence.set(source.evidence_id, source);
   }
   const sources = element("section", "workspace-section source-column", sectionHeading("Источники", element("span", "section-count mono", evidence.size)));
+  sources.tabIndex = -1;
+  sources.setAttribute("aria-label", "Источники");
   if (docError) {
     sources.append(element("div", "callout callout-error",
       element("p", "", "Карточка документа недоступна. ", docError.message),
       button("Повторить", "button button-secondary button-small", reload)));
   }
   const sourceNodes = new Map();
+  const sourcesToReview = [];
   const sourceRank = (source) => {
     if (source.entity_type !== "result" || source.entity_id !== detail.result.result_id) return 2;
     return source.field === "raw_value" || source.field == null ? 0 : 1;
@@ -909,22 +975,29 @@ function renderResultDetail(detail, docDetail, docError, from, reload) {
   for (const [id, source] of orderedSources) {
     const card = sourceCard(source, context, sourceNodes.size);
     sourceNodes.set(id, { node: card, number: sourceNodes.size + 1 });
+    if (sourceNeedsReview(source, mode)) sourcesToReview.push(card);
     sources.append(card);
   }
   if (!evidence.size) sources.append(element("div", "panel", statePanel("Источник не сохранён", "Для этого результата нет фрагментов или локаторов.")));
+  const checks = renderIssues(detail.issues, sourceNodes, from);
   const conditions = element("section", "workspace-section", sectionHeading("Условия эксперимента"),
     element("div", "panel entity-list", entityDetails("Конфигурация", detail.configuration, CONFIG_FIELDS),
       entityDetails("Датасет", detail.dataset, DATASET_FIELDS), entityDetails("Задача", detail.task, TASK_FIELDS),
       entityDetails("Эксперимент", detail.experiment, EXPERIMENT_FIELDS)));
   const actions = element("div", "review-actions", link("К документу", documentRoute(detail.document_id), "text-link"),
+    detail.issues.length ? button(totalLabel(detail.issues.length, ["замечание", "замечания", "замечаний"]),
+      "button button-small button-review", () => focusReviewTarget(checks)) : null,
+    sourcesToReview.length ? button(`Требует сверки · ${totalLabel(sourcesToReview.length, ["источник", "источника", "источников"])}`,
+      "button button-small button-review", () => focusReviewTarget(sourcesToReview[0])) : null,
     documentExport(detail.document_id), pickResult(detail, true));
   return element("div", "review", resultOverview(detail), actions,
-    element("div", "review-body", sources, element("div", "context-column", renderIssues(detail.issues, sourceNodes, from), conditions)));
+    element("div", "review-body", sources, element("div", "context-column", checks, conditions)));
 }
 
 function showResult(screen, params) {
   const id = params.get("id");
   const from = routeBack(params);
+  const section = params.get("section");
   const heading = screenHeading("Результат", { label: "Результаты", href: from });
   const content = element("div", "result-detail");
   WORKSPACE.append(heading, content);
@@ -940,7 +1013,7 @@ function showResult(screen, params) {
       const detail = await request(endpoint("results", id), { signal: screen.signal });
       if (screen.signal.aborted) return;
       heading.querySelector("h1").textContent = detail.result.metric_name;
-      document.title = `${detail.result.metric_name} · Сверка`;
+      document.title = `${detail.result.metric_name} · ${APP_NAME}`;
       const included = new Set(detail.evidence.map((item) => item.evidence_id));
       const needsDocument = detail.extraction_mode === "python"
         || detail.issues.some((issue) => issue.evidence_ids.some((evidenceId) => !included.has(evidenceId)));
@@ -954,7 +1027,21 @@ function showResult(screen, params) {
           docError = error;
         }
       }
-      if (!screen.signal.aborted) content.replaceChildren(renderResultDetail(detail, doc, docError, from, load));
+      if (screen.signal.aborted) return;
+      if (section === "source") {
+        const target = confirmedValuePDF(detail, doc?.document);
+        if (target) {
+          window.location.replace(target.href);
+          return;
+        }
+      }
+      const review = renderResultDetail(detail, doc, docError, from, load);
+      content.replaceChildren(review);
+      if (section === "source") {
+        focusReviewTarget(review.querySelector(".source-card") ?? review.querySelector(".source-column"));
+      } else if (section === "issues") {
+        focusReviewTarget(review.querySelector(".review-checks"));
+      }
     } catch (error) {
       if (!screen.signal.aborted) loadFailure(content, "Не удалось загрузить результат", error, load);
     }
@@ -1080,7 +1167,7 @@ function renderScreen(focus) {
   currentScreen = { name, controller, signal: controller.signal };
   if (name === "results") currentScreen.resultsBack = resultsRoute(resultFilters(params), pageNumber(params));
   if (name === "result") currentScreen.resultsBack = routeBack(params);
-  document.title = `${SCREENS[name].title} · Сверка`;
+  document.title = `${SCREENS[name].title} · ${APP_NAME}`;
   const documents = name === "documents" || name === "document";
   const groups = name === "groups";
   const results = !documents && !groups;

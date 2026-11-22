@@ -3,9 +3,9 @@ package model
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 type GroupResult struct {
@@ -21,20 +21,62 @@ type GroupResult struct {
 }
 
 type ComparableGroup struct {
-	GroupID  string        `json:"group_id"`
-	Criteria []Criterion   `json:"criteria"`
-	Results  []GroupResult `json:"results"`
+	GroupID        string        `json:"group_id"`
+	ExtractionMode string        `json:"extraction_mode"`
+	Criteria       []Criterion   `json:"criteria"`
+	Results        []GroupResult `json:"results"`
 }
 
-// ComparableGroups clusters only extracted numeric results whose pairwise
-// cross-publication comparisons pass every comparison criterion.
-func ComparableGroups(details []ResultDetail) []ComparableGroup {
-	sort.Slice(details, func(i, j int) bool {
-		return details[i].Result.Text("result_id") < details[j].Result.Text("result_id")
-	})
-	buckets := map[string][]ResultDetail{}
-	for _, detail := range details {
-		if detail.Result.Text("extraction_status") != "extracted" || detail.Normalized == nil {
+// GroupCandidates gathers comparable results and publication identities.
+type GroupCandidates struct {
+	details []ResultDetail
+	aliases publicationTitleAliases
+}
+
+// AddDocument includes publication metadata even when there are no comparable results.
+func (c *GroupCandidates) AddDocument(mode string, data DocumentData) {
+	if c.aliases == nil {
+		c.aliases = make(publicationTitleAliases)
+	}
+	c.aliases.add(mode, data.Publication)
+	datasets := recordsByID(data.Datasets, "dataset_id")
+	tasks := recordsByID(data.Tasks, "task_id")
+	experiments := recordsByID(data.Experiments, "experiment_id")
+	for _, summary := range data.Results {
+		if !groupCandidate(summary) {
+			continue
+		}
+		result := summary.Result
+		c.details = append(c.details, ResultDetail{
+			ResultSummary: summary,
+			Publication:   data.Publication,
+			Dataset:       datasets[result.Text("dataset_id")],
+			Task:          tasks[result.Text("task_id")],
+			Experiment:    experiments[result.Text("experiment_id")],
+		})
+	}
+}
+
+func recordsByID(records []Record, field string) map[string]Record {
+	index := make(map[string]Record, len(records))
+	for _, record := range records {
+		index[record.Text(field)] = record
+	}
+	return index
+}
+
+func groupCandidate(summary ResultSummary) bool {
+	return summary.Normalized != nil && summary.Result.Text("extraction_status") == "extracted" &&
+		summary.Result.Text("result_origin") == "primary"
+}
+
+type groupKey [11]string
+
+// Groups returns primary numeric results grouped by matching RAG criteria.
+func (c GroupCandidates) Groups() []ComparableGroup {
+	buckets := map[groupKey][]ResultDetail{}
+	for _, detail := range c.details {
+		if publicationDOI(detail.Publication) == "" && key(detail.Publication.Text("title")) == "" {
 			continue
 		}
 		if fingerprint, ok := groupFingerprint(detail); ok {
@@ -44,88 +86,57 @@ func ComparableGroups(details []ResultDetail) []ComparableGroup {
 
 	groups := make([]ComparableGroup, 0, len(buckets))
 	for _, bucket := range buckets {
-		clusters := [][]ResultDetail{}
-		for _, detail := range bucket {
-			placed := false
-			for i := range clusters {
-				compatible := true
-				checkedPublications := map[string]bool{}
-				for _, member := range clusters[i] {
-					identity := publicationIdentity(member)
-					if checkedPublications[identity] || !differentPublications(member, detail) {
-						continue
-					}
-					checkedPublications[identity] = true
-					if Compare(member, detail).Status != Comparable {
-						compatible = false
-						break
-					}
-				}
-				if compatible {
-					clusters[i] = append(clusters[i], detail)
-					placed = true
-					break
-				}
-			}
-			if !placed {
-				clusters = append(clusters, []ResultDetail{detail})
-			}
+		if len(bucket) < 2 {
+			continue
 		}
-		for _, cluster := range clusters {
-			publications := map[string]bool{}
-			for _, detail := range cluster {
-				publications[publicationIdentity(detail)] = true
+		sort.Slice(bucket, func(i, j int) bool {
+			return bucket[i].Result.Text("result_id") < bucket[j].Result.Text("result_id")
+		})
+		first, second, ok := distinctPublicationPair(bucket, c.aliases)
+		if !ok {
+			continue
+		}
+		comparison := Compare(bucket[first], bucket[second])
+		if comparison.Status != Comparable {
+			continue
+		}
+		members := make([]GroupResult, 0, len(bucket))
+		ids := make([]string, 0, len(bucket))
+		for _, detail := range bucket {
+			configurationName := ""
+			if detail.ConfigurationName != nil {
+				configurationName = *detail.ConfigurationName
 			}
-			if len(publications) < 2 {
-				continue
-			}
-			comparable := true
-			for i := range cluster {
-				for j := i + 1; j < len(cluster); j++ {
-					if differentPublications(cluster[i], cluster[j]) && Compare(cluster[i], cluster[j]).Status != Comparable {
-						comparable = false
-						break
-					}
-				}
-				if !comparable {
-					break
-				}
-			}
-			if !comparable {
-				continue
-			}
-			members := make([]GroupResult, 0, len(cluster))
-			ids := make([]string, 0, len(cluster))
-			for _, detail := range cluster {
-				ids = append(ids, detail.Result.Text("result_id"))
-				members = append(members, GroupResult{
-					ResultID: detail.Result.Text("result_id"), DocumentID: detail.DocumentID,
-					PublicationID:    detail.Publication.Text("publication_id"),
-					PublicationTitle: detail.Publication.Text("title"), DatasetName: detail.Dataset.Text("dataset_name"),
-					ConfigurationName: detail.Configuration.Text("rag_variant"),
-					MetricName:        detail.Result.Text("metric_name"), RawValue: detail.Result.Text("raw_value"),
-					Normalized: detail.Normalized,
-				})
-			}
-			criteria := []Criterion{}
-			for _, detail := range cluster {
-				if differentPublications(cluster[0], detail) {
-					criteria = Compare(cluster[0], detail).Criteria
-					break
-				}
-			}
-			sum := sha256.Sum256([]byte(joinGroupIDs(ids)))
-			groups = append(groups, ComparableGroup{
-				GroupID: "group_" + hex.EncodeToString(sum[:8]), Criteria: criteria, Results: members,
+			ids = append(ids, detail.Result.Text("result_id"))
+			members = append(members, GroupResult{
+				ResultID: detail.Result.Text("result_id"), DocumentID: detail.DocumentID,
+				PublicationID:    detail.Publication.Text("publication_id"),
+				PublicationTitle: detail.Publication.Text("title"), DatasetName: detail.Dataset.Text("dataset_name"),
+				ConfigurationName: configurationName,
+				MetricName:        detail.Result.Text("metric_name"), RawValue: detail.Result.Text("raw_value"),
+				Normalized: detail.Normalized,
 			})
 		}
+		// Put the confirmed pair first so the UI compares distinct publications.
+		members[0], members[first] = members[first], members[0]
+		members[1], members[second] = members[second], members[1]
+		sum := sha256.Sum256([]byte(strings.Join(ids, "\n") + "\n"))
+		groups = append(groups, ComparableGroup{
+			GroupID:        "group_" + hex.EncodeToString(sum[:8]),
+			ExtractionMode: bucket[first].ExtractionMode,
+			Criteria:       comparison.Criteria,
+			Results:        members,
+		})
 	}
 	sort.Slice(groups, func(i, j int) bool { return groups[i].GroupID < groups[j].GroupID })
 	return groups
 }
 
-func groupFingerprint(detail ResultDetail) (string, bool) {
+func groupFingerprint(detail ResultDetail) (groupKey, bool) {
 	result := detail.Result
+	if CutoffConflict(result) || RawValueConflict(result) {
+		return groupKey{}, false
+	}
 	unit, _ := normalizationUnit(result)
 	cutoff := result.Text("metric_k_applicability")
 	switch cutoff {
@@ -133,13 +144,15 @@ func groupFingerprint(detail ResultDetail) (string, bool) {
 	case "applicable":
 		value, ok := result.Number("metric_k")
 		if !ok {
-			return "", false
+			return groupKey{}, false
 		}
-		cutoff += ":" + strconv.FormatFloat(value, 'f', -1, 64)
+		cutoff += ":" + strconv.FormatFloat(value+0, 'f', -1, 64)
 	default:
-		return "", false
+		return groupKey{}, false
 	}
-	values := []string{
+	// Include every equality criterion from Compare and keep extraction modes separate.
+	values := groupKey{
+		detail.ExtractionMode,
 		detail.Task.Text("task_type"), detail.Dataset.Text("dataset_name"),
 		detail.Dataset.Text("dataset_version"), detail.Dataset.Text("data_split"),
 		baseMetric(result), result.Text("metric_variant"), cutoff, unit,
@@ -148,31 +161,75 @@ func groupFingerprint(detail ResultDetail) (string, bool) {
 	for index := range values {
 		values[index] = key(values[index])
 		if values[index] == "" {
-			return "", false
+			return groupKey{}, false
 		}
 	}
-	encoded, err := json.Marshal(values)
-	return string(encoded), err == nil
+	return values, true
 }
 
-func publicationIdentity(detail ResultDetail) string {
-	if doi := normalizeDOI(key(detail.Publication.Text("doi"))); doi != "" {
-		return "doi:" + doi
-	}
-	if title := key(detail.Publication.Text("title")); title != "" {
-		return "title:" + title
-	}
-	if id := detail.Publication.Text("publication_id"); id != "" {
-		return "publication:" + id
-	}
-	return "document:" + detail.DocumentID
+type publicationTitle struct {
+	mode, title string
 }
 
-func joinGroupIDs(ids []string) string {
-	sort.Strings(ids)
-	result := ""
-	for _, id := range ids {
-		result += id + "\n"
+// An empty DOI marks a title associated with multiple distinct DOIs.
+type publicationTitleAliases map[publicationTitle]string
+
+func (aliases publicationTitleAliases) add(mode string, publication Record) {
+	title, doi := key(publication.Text("title")), publicationDOI(publication)
+	if title == "" || doi == "" {
+		return
 	}
-	return result
+	alias := publicationTitle{mode: mode, title: title}
+	if previous, found := aliases[alias]; found && previous != doi {
+		aliases[alias] = ""
+	} else {
+		aliases[alias] = doi
+	}
+}
+
+func (aliases publicationTitleAliases) identity(detail ResultDetail) (doi, title string) {
+	doi, title = publicationDOI(detail.Publication), key(detail.Publication.Text("title"))
+	if doi != "" {
+		return doi, title
+	}
+	alias, found := aliases[publicationTitle{mode: detail.ExtractionMode, title: title}]
+	if found && alias == "" {
+		return "", ""
+	}
+	return alias, title
+}
+
+func distinctPublicationPair(bucket []ResultDetail, aliases publicationTitleAliases) (int, int, bool) {
+	firstDOI := ""
+	withDOI, withoutDOI := -1, -1
+	for i, detail := range bucket {
+		doi, title := aliases.identity(detail)
+		switch {
+		case doi == "":
+			if withoutDOI == -1 && title != "" {
+				withoutDOI = i
+			}
+		case withDOI == -1:
+			firstDOI, withDOI = doi, i
+		case doi != firstDOI:
+			return withDOI, i, true
+		}
+	}
+	if withoutDOI != -1 {
+		title := key(bucket[withoutDOI].Publication.Text("title"))
+		for i, detail := range bucket {
+			if _, other := aliases.identity(detail); other != "" && other != title {
+				return min(i, withoutDOI), max(i, withoutDOI), true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+func publicationDOI(publication Record) string {
+	value := key(publication.Text("doi"))
+	for _, prefix := range []string{"doi:", "https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "http://dx.doi.org/", "doi.org/"} {
+		value = strings.TrimSpace(strings.TrimPrefix(value, prefix))
+	}
+	return strings.TrimRight(value, ".,; ")
 }

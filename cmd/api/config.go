@@ -6,6 +6,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -56,11 +57,30 @@ func settingsFromEnvironment() (settings, error) {
 		if err != nil || !info.Mode().IsRegular() {
 			return cfg, fmt.Errorf("PYTHON_SCRIPT must point to an existing regular file")
 		}
+		cfg.python.Executable, err = exec.LookPath(cfg.python.Executable)
+		if err != nil {
+			return cfg, fmt.Errorf("PYTHON_BIN must resolve to an executable: %w", err)
+		}
 	}
 	if cfg.api.ExtractionMode == "python" && cfg.python.Script == "" {
 		return cfg, fmt.Errorf("PYTHON_SCRIPT is required in python mode")
 	}
 	return cfg, nil
+}
+
+func (cfg settings) validateQueuedModes(modes []string) error {
+	for _, mode := range modes {
+		switch mode {
+		case "mock":
+		case "python":
+			if cfg.python.Script == "" {
+				return errors.New("PYTHON_SCRIPT is required for queued python jobs")
+			}
+		default:
+			return fmt.Errorf("queued jobs require unsupported extraction mode %q", mode)
+		}
+	}
+	return nil
 }
 
 func env(key, fallback string) string {

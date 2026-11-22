@@ -20,9 +20,15 @@ type Page[T any] struct {
 	Total    int `json:"total"`
 }
 
-func (s *Store) ListDocuments(ctx context.Context, page Pagination) (Page[model.Document], error) {
-	return list(ctx, s.db, page, "documents", documentColumns, "",
-		"uploaded_at DESC, document_id DESC", nil, func(row scanner) (model.Document, error) {
+func (s *Store) ListDocuments(ctx context.Context, page Pagination, corpusID string) (Page[model.Document], error) {
+	var where string
+	var args []any
+	if corpusID != "" {
+		where = " WHERE corpus_id = ?"
+		args = []any{corpusID}
+	}
+	return list(ctx, s.db, page, "documents", documentColumns, where,
+		"uploaded_at DESC, document_id DESC", args, func(row scanner) (model.Document, error) {
 			return scanDocument(row)
 		})
 }

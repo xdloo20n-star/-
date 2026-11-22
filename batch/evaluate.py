@@ -12,6 +12,11 @@ import sys
 import unicodedata
 import zipfile
 
+if __package__:
+    from .result_validation import DUPLICATE_FIELDS, validate_duplicates
+else:
+    from result_validation import DUPLICATE_FIELDS, validate_duplicates
+
 
 SCOPES = ("all_results", "table_only")
 STATUSES = ("extracted", "absent", "present_not_extractable")
@@ -24,6 +29,9 @@ RESULT_FIELDS = (
     "raw_value", "raw_unit", "metric_name", "metric_variant", "metric_k", "aggregation",
     "source_page", "source_table", "source_figure",
 )
+SOURCE_FIELDS = ("raw_value", "raw_unit", "metric_name", "metric_k", "metric_variant", "aggregation",
+                 "source_page", "source_table", "source_figure")
+DIAGNOSTIC_FIELDS = SOURCE_FIELDS[1:]
 DECIMAL = re.compile(r"([+-]?)([0-9]*)(?:\.([0-9]+))? *(%?)")
 INTEGER = re.compile(r"[0-9]+")
 INLINE_CUTOFF = re.compile(r"\s*@\s*([0-9]+)(?![\w.])")
@@ -62,7 +70,7 @@ def metric_key(row):
     name = label(row["metric_name"])
     cutoff_field = literal(row["metric_k"])
     cutoff = unsigned_integer(cutoff_field)
-    if name in MISSING or (cutoff_field and cutoff is None):
+    if cutoff_field and cutoff is None:
         return None
     inline = {unsigned_integer(match[1]) for match in INLINE_CUTOFF.finditer(name)}
     if len(inline) > 1 or (cutoff is not None and inline and cutoff not in inline):
@@ -73,7 +81,7 @@ def metric_key(row):
         # A terminal @k and the dedicated column express the same cutoff.
         name = name.removesuffix(f"@{cutoff}")
     if name in MISSING:
-        return None
+        name = ""
     name = re.sub(r"^(bleu|rouge)[ _-]([0-9]+|l)$", r"\1-\2", name)
     return name, cutoff, label(row["metric_variant"]), label(row["aggregation"])
 
@@ -86,7 +94,14 @@ def locator_key(value, prefix):
     return "" if value in MISSING else value
 
 
-def source_key(row):
+def has_source_requirements(key, ignored_field=None):
+    _, _, (name, *_), page, table, figure = key
+    return ((bool(name) or ignored_field == "metric_name")
+            and (page not in (None, "0") or ignored_field == "source_page")
+            and (bool(table or figure) or ignored_field in ("source_table", "source_figure")))
+
+
+def source_key(row, *, allow_incomplete=False):
     value = raw_key(row["raw_value"])
     unit = literal(row["raw_unit"])
     if value.endswith("%") and label(unit) in {"%", "percent"}:
@@ -95,9 +110,10 @@ def source_key(row):
     page = unsigned_integer(literal(row["source_page"]))
     table = locator_key(row["source_table"], TABLE_PREFIX)
     figure = locator_key(row["source_figure"], FIGURE_PREFIX)
-    if not value or metric is None or page in (None, "0") or not (table or figure):
+    if not value or metric is None:
         return None
-    return value, unit, metric, page, table, figure
+    key = value, unit, metric, page, table, figure
+    return key if allow_incomplete or has_source_requirements(key) else None
 
 
 def indexed_csv(open_csv, table, id_field, fields, *, optional=False):
@@ -161,6 +177,7 @@ def read_corpus(open_csv):
     configurations = indexed_csv(open_csv, "configurations", "config_id", CONFIG_FIELDS, optional=True)
     datasets = indexed_csv(open_csv, "datasets", "dataset_id", DATASET_FIELDS, optional=True)
     by_publication = defaultdict(list)
+    duplicate_fields = set(DUPLICATE_FIELDS)
     for publication_id, row in publications.items():
         row["in_scope"] = label(row["in_scope"])
         if row["in_scope"] not in ("true", "false"):
@@ -172,14 +189,12 @@ def read_corpus(open_csv):
         if status not in STATUSES:
             raise ValueError(f"{publication_id}/{result_id}: invalid extraction_status {status!r}")
         row["extraction_status"] = status
-        duplicate_of = row["duplicate_of"].strip()
-        if duplicate_of:
-            target = results.get((publication_id, duplicate_of))
-            if (status != "extracted" or target is None or target["duplicate_of"].strip()
-                    or label(target["extraction_status"]) != "extracted"):
-                raise ValueError(f"{publication_id}/{result_id}: duplicate_of must point to a canonical extracted row")
-        row["duplicate_of"] = duplicate_of
+        row["duplicate_of"] = row["duplicate_of"].strip()
+        if row["duplicate_of"] and (missing := duplicate_fields.difference(row)):
+            raise ValueError(f"{publication_id}/{result_id}: duplicate_of validation requires columns "
+                             f"{', '.join(sorted(missing))}")
         by_publication[publication_id].append(row)
+    validate_duplicates(results.values())
     return Corpus(publications, by_publication, configurations, datasets)
 
 
@@ -203,10 +218,11 @@ def publication_report(corpus, publication_id):
     return {"decision": decision, "exclusion_reason": reason}
 
 
-def scoped_records(corpus, publication_id, decision, scope, in_gold):
+def scoped_records(corpus, publication_id, decision, scope, in_gold, diagnostics):
     counts = dict.fromkeys(COUNTS, 0)
     source_keys = Counter()
     context_keys = Counter()
+    incomplete_keys = Counter()
     for row in corpus.results.get(publication_id, ()):
         if scope == "table_only" and not locator_key(row["source_table"], TABLE_PREFIX):
             continue
@@ -218,14 +234,18 @@ def scoped_records(corpus, publication_id, decision, scope, in_gold):
         if not in_gold or decision != "included" or status != "extracted" or row["duplicate_of"]:
             continue
         counts["eligible"] += 1
-        key = source_key(row)
-        if key is not None:
+        key = source_key(row, allow_incomplete=diagnostics)
+        if key is None:
+            continue
+        if not diagnostics or has_source_requirements(key):
             source_keys[key] += 1
             if (context := corpus.context_key(row)) is not None:
                 context_keys[key, context] += 1
+        else:
+            incomplete_keys[key] += 1
     counts["source_keyed"] = source_keys.total()
     counts["context_keyed"] = context_keys.total()
-    return counts, source_keys, context_keys
+    return counts, source_keys, context_keys, incomplete_keys
 
 
 def ratio(numerator, denominator):
@@ -243,19 +263,47 @@ def agreement(matches, gold, candidate):
     }
 
 
-def scope_report(gold, candidate, publication_id, decisions, scope):
+def project_source_keys(counter, field, offset):
+    projected = Counter()
+    for key, count in counter.items():
+        if has_source_requirements(key, field):
+            value, unit, metric, page, table, figure = key
+            flat_key = value, unit, *metric, page, table, figure
+            projected[flat_key[:offset] + flat_key[offset + 1:]] += count
+    return projected
+
+
+def additional_matches_by_field(gold_rest, candidate_rest):
+    counts = dict.fromkeys(DIAGNOSTIC_FIELDS, 0)
+    if gold_rest and candidate_rest:
+        for offset, field in enumerate(DIAGNOSTIC_FIELDS, start=1):
+            gold_projected = project_source_keys(gold_rest, field, offset)
+            candidate_projected = project_source_keys(candidate_rest, field, offset)
+            counts[field] = (gold_projected & candidate_projected).total()
+    return counts
+
+
+def scope_report(gold, candidate, publication_id, decisions, scope, diagnostics):
     in_gold = publication_id in gold.publications
-    gold_counts, gold_source, gold_context = scoped_records(gold, publication_id, decisions["gold"], scope, in_gold)
-    candidate_counts, candidate_source, candidate_context = scoped_records(
-        candidate, publication_id, decisions["candidate"], scope, in_gold)
+    gold_counts, gold_source, gold_context, gold_incomplete = scoped_records(
+        gold, publication_id, decisions["gold"], scope, in_gold, diagnostics)
+    candidate_counts, candidate_source, candidate_context, candidate_incomplete = scoped_records(
+        candidate, publication_id, decisions["candidate"], scope, in_gold, diagnostics)
     denominators = gold_counts["eligible"], candidate_counts["eligible"]
-    return {
+    strict = gold_source & candidate_source
+    report = {
         "gold": gold_counts,
         "candidate": candidate_counts,
-        "source_agreement": agreement((gold_source & candidate_source).total(), *denominators) if in_gold else None,
+        "source_agreement": agreement(strict.total(), *denominators) if in_gold else None,
         "context_agreement": agreement((gold_context & candidate_context).total(), *denominators)
         if in_gold and gold.has_context and candidate.has_context else None,
     }
+    if diagnostics:
+        # Keep exact matches fixed and include rows that can be keyed after projection.
+        report["additional_matches_by_field"] = additional_matches_by_field(
+            gold_source - strict + gold_incomplete, candidate_source - strict + candidate_incomplete,
+        ) if in_gold else None
+    return report
 
 
 def sum_counts(papers, side):
@@ -274,13 +322,13 @@ def corpus_agreement(papers, key, gold_count, candidate_count):
     }
 
 
-def corpus_scope(documents, expected, unexpected, scope, has_context):
+def corpus_scope(documents, expected, unexpected, scope, has_context, diagnostics):
     papers = [documents[publication_id]["scopes"][scope] for publication_id in expected]
     extras = [documents[publication_id]["scopes"][scope] for publication_id in unexpected]
     gold = sum_counts(papers, "gold")
     candidate = sum_counts(papers, "candidate")
     denominators = gold["eligible"], candidate["eligible"]
-    return {
+    report = {
         "gold": gold,
         "candidate": candidate,
         "candidate_outside_gold": sum_counts(extras, "candidate"),
@@ -289,9 +337,15 @@ def corpus_scope(documents, expected, unexpected, scope, has_context):
         "source_agreement": corpus_agreement(papers, "source_agreement", *denominators),
         "context_agreement": corpus_agreement(papers, "context_agreement", *denominators) if has_context else None,
     }
+    if diagnostics:
+        report["additional_matches_by_field"] = {
+            field: sum(paper["additional_matches_by_field"][field] for paper in papers)
+            for field in DIAGNOSTIC_FIELDS
+        }
+    return report
 
 
-def evaluate(gold, candidate):
+def evaluate(gold, candidate, *, diagnostics=False):
     expected = sorted(gold.publications)
     present = sorted(gold.publications.keys() & candidate.publications.keys())
     missing = sorted(gold.publications.keys() - candidate.publications.keys())
@@ -302,9 +356,9 @@ def evaluate(gold, candidate):
                  "candidate": publication_report(candidate, publication_id)}
         decisions = {side: info["decision"] for side, info in sides.items()}
         documents[publication_id] = {**sides, "in_gold": publication_id in gold.publications, "scopes": {
-            scope: scope_report(gold, candidate, publication_id, decisions, scope) for scope in SCOPES
+            scope: scope_report(gold, candidate, publication_id, decisions, scope, diagnostics) for scope in SCOPES
         }}
-    return {
+    report = {
         "report_version": 1,
         "interpretation": AGREEMENT_LABEL,
         "scoring": {
@@ -327,11 +381,19 @@ def evaluate(gold, candidate):
                                             documents[publication_id]["candidate"]["decision"]],
             },
             "context_tables_available": {"gold": gold.has_context, "candidate": candidate.has_context},
-            "scopes": {scope: corpus_scope(documents, expected, unexpected, scope, gold.has_context and candidate.has_context)
+            "scopes": {scope: corpus_scope(documents, expected, unexpected, scope,
+                                         gold.has_context and candidate.has_context, diagnostics)
                        for scope in SCOPES},
         },
         "documents": documents,
     }
+    if diagnostics:
+        report["scoring"]["additional_matches_by_field"] = (
+            "One-to-one matches gained by ignoring one field at a time after exact matching. "
+            "The ignored field may be missing if the remaining fields suffice. "
+            "Counts can overlap across fields and do not affect precision, recall or F1."
+        )
+    return report
 
 
 def percent(value):
@@ -350,6 +412,13 @@ def counts_text(scope):
 
 def paper_score_text(name, score):
     return f"{name} unavailable" if score is None else f"{name} {score['matches']} matches, P/R/F1 {ratios_text(score)}"
+
+
+def print_diagnostics(scope, indent):
+    if (counts := scope.get("additional_matches_by_field")) is not None:
+        entries = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        positive = ", ".join(f"{field} +{count}" for field, count in entries if count)
+        print(f"{indent}Additional matches when ignoring one field: {positive or 'none'}")
 
 
 def print_report(report):
@@ -375,6 +444,7 @@ def print_report(report):
                 continue
             print(f"  {paper_score_text(score_label + ' micro', scores['micro'])}")
             print(f"  {score_label} macro ({scores['macro']['papers']} papers), P/R/F1 {ratios_text(scores['macro'])}")
+        print_diagnostics(scope, "  ")
     for publication_id, paper in report["documents"].items():
         gold = paper["gold"]["decision"] if paper["in_gold"] else "outside gold"
         print(f"\n{publication_id} gold {gold}, candidate {paper['candidate']['decision']}")
@@ -387,6 +457,7 @@ def print_report(report):
             if paper["in_gold"]:
                 print(f"    {paper_score_text('Source', scope['source_agreement'])}. "
                       f"{paper_score_text('Context', scope['context_agreement'])}.")
+                print_diagnostics(scope, "    ")
 
 
 def main(argv=None):
@@ -396,12 +467,14 @@ def main(argv=None):
     source.add_argument("--gold", type=Path, help="extracted dev_gold CSV folder")
     source.add_argument("--corpus-zip", type=Path, help="organizer archive containing dev_gold/")
     parser.add_argument("--json-report", metavar="PATH", help="write JSON to PATH, or use '-' for JSON on stdout")
+    parser.add_argument("--diagnostics", action="store_true",
+                        help="count additional matches when ignoring one source field at a time")
     args = parser.parse_args(argv)
     try:
         gold = read_directory(args.gold) if args.gold else read_gold_zip(args.corpus_zip)
         if not gold.publications:
             raise ValueError("gold publications.csv has no PDFs")
-        report = evaluate(gold, read_directory(args.candidate))
+        report = evaluate(gold, read_directory(args.candidate), diagnostics=args.diagnostics)
         if args.json_report:
             payload = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
             if args.json_report == "-":

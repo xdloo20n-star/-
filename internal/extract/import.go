@@ -131,11 +131,14 @@ func (i *Importer) Prepare(raw []byte, doc model.Document) (*model.DocumentData,
 			record[set.idField] = scopedID(doc.ID, set.kind, record.Text(set.idField))
 		}
 	}
-	return &model.DocumentData{
+	data := &model.DocumentData{
 		SourceDocument: sourceDocument, Publication: pub, Configurations: configs,
 		Datasets: datasets, Tasks: tasks, Experiments: experiments, Results: summaries,
 		Evidence: evidence, Issues: issues,
-	}, nil
+	}
+	data.RefreshResultIntegrity()
+	data.RefreshBaselines()
+	return data, nil
 }
 
 func records(object map[string]any, key string) []model.Record {
@@ -244,7 +247,6 @@ func validateEvidence(doc model.Record, evidence []model.Record, index entityInd
 
 func makeResultSummaries(doc model.Document, results []model.Record, index entityIndex) []model.ResultSummary {
 	summaries := make([]model.ResultSummary, 0, len(results))
-	details := make(map[string]model.ResultDetail, len(results))
 	for _, result := range results {
 		config := index["configuration"][result.Text("config_id")]
 		task := index["task"][result.Text("task_id")]
@@ -255,19 +257,6 @@ func makeResultSummaries(doc model.Document, results []model.Record, index entit
 			TaskType: task.TextPtr("task_type"), ConfigurationName: config.TextPtr("rag_variant"),
 		}
 		summaries = append(summaries, summary)
-		details[result.Text("result_id")] = model.ResultDetail{
-			ResultSummary: summary, Dataset: dataset, Task: task,
-			Experiment: index["experiment"][result.Text("experiment_id")],
-		}
-	}
-	for i := range summaries {
-		result := summaries[i].Result
-		if baselineID := result.Text("baseline_result_id"); baselineID != "" {
-			left, baseline := details[result.Text("result_id")], details[baselineID]
-			if model.Compare(left, baseline).Numeric != nil {
-				summaries[i].Baseline = baseline.Normalized
-			}
-		}
 	}
 	return summaries
 }
@@ -307,7 +296,7 @@ func makeIssues(doc model.Document, publication, sourceDocument model.Record, ro
 		if result.Text("result_origin") == "cited" && result.Text("cited_publication_id") == "" {
 			add("citation_missing", "Обозначение цитируемой публикации не установлено.")
 		}
-		if result["reported_value"] != nil && row.Normalized == nil {
+		if result["reported_value"] != nil && row.Normalized == nil && !model.RawValueConflict(result) {
 			add("normalization", "Нормализация недоступна для указанного значения, единицы или шкалы.")
 		}
 	}

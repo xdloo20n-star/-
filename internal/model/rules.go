@@ -6,13 +6,13 @@ import (
 	"strings"
 )
 
-var integerCutoffSuffix = regexp.MustCompile(`@\d+$`)
+var integerCutoffSuffix = regexp.MustCompile(`\s*@\s*([0-9]+)\s*$`)
 
 // Normalized derives a value only from explicit units or scale information.
 func Normalized(result Record) *MeasuredValue {
 	value, ok := result.Number("reported_value")
 	unit, factor := normalizationUnit(result)
-	if !ok || unit == "" {
+	if !ok || unit == "" || RawValueConflict(result) {
 		return nil
 	}
 	if factor < 1 {
@@ -114,33 +114,14 @@ type NumericComparison struct {
 }
 
 func Compare(left, right ResultDetail) Comparison {
-	leftUnit, _ := normalizationUnit(left.Result)
-	rightUnit, _ := normalizationUnit(right.Result)
+	criteria, status := compareConditions(left, right)
 	comparison := Comparison{
 		LeftResultID:        left.Result.Text("result_id"),
 		RightResultID:       right.Result.Text("result_id"),
 		LeftExtractionMode:  left.ExtractionMode,
 		RightExtractionMode: right.ExtractionMode,
-		Status:              Comparable,
-		Criteria: []Criterion{
-			compareText("task", "Тип задачи", left.Task.Text("task_type"), right.Task.Text("task_type")),
-			compareText("dataset", "Датасет", left.Dataset.Text("dataset_name"), right.Dataset.Text("dataset_name")),
-			compareText("dataset_version", "Версия датасета", left.Dataset.Text("dataset_version"), right.Dataset.Text("dataset_version")),
-			compareText("data_split", "Сплит", left.Dataset.Text("data_split"), right.Dataset.Text("data_split")),
-			compareDefinition(left.Result, right.Result),
-			compareCutoff(left.Result, right.Result),
-			compareText("scale", "Шкала после нормализации", leftUnit, rightUnit),
-			compareText("aggregation", "Агрегация", left.Result.Text("aggregation"), right.Result.Text("aggregation")),
-			compareText("evaluation_protocol", "Протокол оценки", left.Experiment.Text("evaluation_protocol"), right.Experiment.Text("evaluation_protocol")),
-		},
-	}
-	for _, criterion := range comparison.Criteria {
-		switch {
-		case criterion.Status == "mismatch":
-			comparison.Status = NotComparable
-		case criterion.Status == "missing" && comparison.Status == Comparable:
-			comparison.Status = InsufficientInformation
-		}
+		Status:              status,
+		Criteria:            criteria,
 	}
 	if comparison.Status != Comparable || left.Normalized == nil || right.Normalized == nil {
 		return comparison
@@ -157,27 +138,34 @@ func Compare(left, right ResultDetail) Comparison {
 	return comparison
 }
 
-func differentPublications(left, right ResultDetail) bool {
-	leftDOI, rightDOI := key(left.Publication.Text("doi")), key(right.Publication.Text("doi"))
-	if leftDOI != "" && rightDOI != "" {
-		return normalizeDOI(leftDOI) != normalizeDOI(rightDOI)
+func compareConditions(left, right ResultDetail) ([]Criterion, string) {
+	leftUnit, _ := normalizationUnit(left.Result)
+	rightUnit, _ := normalizationUnit(right.Result)
+	scale := compareText("scale", "Шкала после нормализации", leftUnit, rightUnit)
+	if scale.Status != "mismatch" && (RawValueConflict(left.Result) || RawValueConflict(right.Result)) {
+		scale = Criterion{"scale", "missing", "Числовой разбор отличается от записи в PDF для одной или обеих метрик."}
 	}
-	leftTitle, rightTitle := key(left.Publication.Text("title")), key(right.Publication.Text("title"))
-	if leftTitle != "" && rightTitle != "" {
-		return leftTitle != rightTitle
+	criteria := []Criterion{
+		compareText("task", "Тип задачи", left.Task.Text("task_type"), right.Task.Text("task_type")),
+		compareText("dataset", "Датасет", left.Dataset.Text("dataset_name"), right.Dataset.Text("dataset_name")),
+		compareText("dataset_version", "Версия датасета", left.Dataset.Text("dataset_version"), right.Dataset.Text("dataset_version")),
+		compareText("data_split", "Сплит", left.Dataset.Text("data_split"), right.Dataset.Text("data_split")),
+		compareDefinition(left.Result, right.Result),
+		compareCutoff(left.Result, right.Result),
+		scale,
+		compareText("aggregation", "Агрегация", left.Result.Text("aggregation"), right.Result.Text("aggregation")),
+		compareText("evaluation_protocol", "Протокол оценки", left.Experiment.Text("evaluation_protocol"), right.Experiment.Text("evaluation_protocol")),
 	}
-	leftID, rightID := left.Publication.Text("publication_id"), right.Publication.Text("publication_id")
-	if leftID != "" && rightID != "" {
-		return leftID != rightID
+	status := Comparable
+	for _, criterion := range criteria {
+		switch criterion.Status {
+		case "mismatch":
+			return criteria, NotComparable
+		case "missing":
+			status = InsufficientInformation
+		}
 	}
-	return left.DocumentID != right.DocumentID
-}
-
-func normalizeDOI(value string) string {
-	for _, prefix := range []string{"https://doi.org/", "http://doi.org/", "https://dx.doi.org/", "doi.org/", "doi:"} {
-		value = strings.TrimPrefix(value, prefix)
-	}
-	return strings.TrimRight(strings.TrimSpace(value), ".,; ")
+	return criteria, status
 }
 
 func compareText(name, label, left, right string) Criterion {
@@ -200,6 +188,9 @@ func compareDefinition(left, right Record) Criterion {
 }
 
 func compareCutoff(left, right Record) Criterion {
+	if CutoffConflict(left) || CutoffConflict(right) {
+		return Criterion{"metric_k", "mismatch", "Значение k в названии метрики противоречит отдельному полю."}
+	}
 	leftApplicability := left.Text("metric_k_applicability")
 	rightApplicability := right.Text("metric_k_applicability")
 	leftK, leftKnown := left.Number("metric_k")

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"sverka/internal/extract"
@@ -35,6 +36,8 @@ type Server struct {
 	timeout     time.Duration
 	corsOrigin  string
 	wake        chan struct{}
+	// Serialize corpus uploads from lookup through enqueue, including ordinary POSTs.
+	corpusUploads sync.Mutex
 }
 
 func New(config Config, db *store.Store, importer *extract.Importer, logger *slog.Logger, extractors ...extract.Extractor) *Server {
@@ -61,6 +64,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	get("/api/v1/documents/{id}", s.document)
 	get("/api/v1/documents/{id}/file", s.documentFile)
+	get("/api/v1/documents/{id}/digest", s.documentDigest)
 	get("/api/v1/results", s.listResults)
 	get("/api/v1/results/{id}", s.result)
 	get("/api/v1/groups", s.comparableGroups)

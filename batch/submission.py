@@ -9,6 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from .api import problem_text
+from .result_validation import csv_cell, validate_duplicates
 
 
 CORPUS_ID = re.compile(r"[DP][0-9]{3}")
@@ -23,6 +24,7 @@ TABLE_KEYS = {
     "issues": "issue_id",
 }
 SOURCE_FIELDS = ("page", "section", "table", "figure", "fragment")
+SOURCE_LOCATORS = ("fragment", "table", "figure")
 SCHEMA_MEMBER = "submission_template/schema.json"
 
 
@@ -154,13 +156,17 @@ def joined(values, field):
     return "; ".join(values)
 
 
+def has_csv_locator(item):
+    return any(csv_cell(item.get(field)) for field in SOURCE_LOCATORS)
+
+
 def value_evidence_rank(item):
     # Prefer sources that fit the organizer's locator fields. Break ties by
     # specificity and verified quotes, then retain the API's evidence order.
     return (
-        not any(item.get(field) for field in ("fragment", "table", "figure")),
+        not has_csv_locator(item),
         item.get("field") != "raw_value",
-        not (item.get("fragment") and item.get("verification") in ("text_match", "ocr_match")),
+        not (csv_cell(item.get("fragment")) and item.get("verification") in ("text_match", "ocr_match")),
     )
 
 
@@ -169,6 +175,18 @@ def result_row(summary, sources):
     if not isinstance(result, dict):
         raise ValueError("result summary is missing its result object")
     row = dict(result)
+    result_id = result["result_id"]
+    origin = csv_cell(result.get("result_origin"))
+    cited_id = csv_cell(result.get("cited_publication_id"))
+    if origin == "cited" and not cited_id:
+        raise ValueError(f"result {result_id!r}: cited result without citation identifier (cited_publication_id)")
+    if origin == "primary" and cited_id:
+        raise ValueError(f"result {result_id!r}: primary result has cited_publication_id")
+    source = min(sources.get(result_id, ()), key=value_evidence_rank, default={})
+    if csv_cell(result.get("extraction_status")) == "extracted" and not has_csv_locator(source):
+        raise ValueError(f"result {result_id!r}: extracted result without a CSV source locator "
+                         "(requires a page and at least one of fragment, table, or figure)")
+
     normalized = summary.get("normalized")
     baseline = summary.get("baseline")
     value = normalized["value"] if normalized is not None else None
@@ -176,7 +194,6 @@ def result_row(summary, sources):
     row.update(metric_value=value, normalized_value=value, metric_unit=unit, normalized_unit=unit,
                baseline_value=baseline["value"] if baseline is not None else None)
 
-    source = min(sources.get(result.get("result_id"), ()), key=value_evidence_rank, default={})
     row.update({f"source_{field}": source.get(field) for field in SOURCE_FIELDS})
     notes = [row["note"]] if row.get("note") else []
     for field, label in (("table_row", "Table row"), ("table_column", "Table column"),
@@ -193,6 +210,8 @@ def add_document(rows, corpus_id, detail):
     if not isinstance(publication, dict) or type(publication.get("in_scope")) is not bool:
         raise ValueError("missing publication or invalid in_scope decision")
     included = publication["in_scope"]
+    if not included and data.get("results"):
+        raise ValueError("excluded publication has result rows")
     authors = publication.get("authors")
     rows["publications"].append(dict(publication, publication_id=corpus_id, DOI=publication.get("doi"),
                                      in_scope="true" if included else "false",
@@ -208,19 +227,23 @@ def add_document(rows, corpus_id, detail):
     for item in records(data, "evidence"):
         sources_by_id[item["evidence_id"]] = item
         if item.get("entity_type") == "result" and item.get("field") in (None, "", "raw_value"):
-            if item.get("page") and any(item.get(field) for field in ("fragment", "table", "figure", "bbox", "block_id")):
+            page = csv_cell(item.get("page"))
+            if (re.fullmatch(r"[0-9]*[1-9][0-9]*", page)
+                    and (has_csv_locator(item) or item.get("bbox") or item.get("block_id"))):
                 sources_by_result[item["entity_id"]].append(item)
 
-    result_ids = set()
+    result_rows = []
     for summary in records(data, "results"):
-        mode = summary.get("extraction_mode", "python")
+        mode = summary.get("extraction_mode")
         if mode != "python":
             raise ValueError(f"python document has a result with extraction_mode={mode!r}")
         if summary.get("document_id", detail["document"].get("document_id")) != detail["document"].get("document_id"):
             raise ValueError("result summary belongs to a different document")
-        row = result_row(summary, sources_by_result)
-        result_ids.add(row["result_id"])
-        rows["results"].append(dict(row, publication_id=corpus_id))
+        result_rows.append(dict(result_row(summary, sources_by_result), publication_id=corpus_id))
+
+    validate_duplicates(result_rows)
+    rows["results"].extend(result_rows)
+    result_ids = {row["result_id"] for row in result_rows}
 
     for issue in records(data, "issues"):
         ids = issue.get("result_ids", [])

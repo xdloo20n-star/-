@@ -1,3 +1,4 @@
+from dataclasses import replace
 import unittest
 
 from pdf_pages import PDF, Page, Word
@@ -53,6 +54,18 @@ class SyntheticAccuracyTest(unittest.TestCase):
                           if row['metric_name'] == 'Accuracy gain over Vanilla RAG'], ['+4.4', '+4.4'])
 
     def test_missing_protocol_or_unanchored_dataset_does_not_relabel_scores(self):
-        for words, method in ((grid(), 'We report the best run.'), (grid(348.0), METHOD)):
+        inconsistent = tuple(replace(word, text='+8.4') if word.text == '+4.4' else word for word in grid())
+        for words, method in ((grid(), 'We report the best run.'), (grid(348.0), METHOD), (inconsistent, METHOD)):
             with self.subTest(method=method):
                 self.assertFalse(any(row['metric_name'] == 'Accuracy' for row in self.extract(words, method)['results']))
+
+    def test_top_k_is_scoped_to_the_comparison_rag_implementation(self):
+        alternative = 'We rerank these chunks and select the top-40 as context.'
+        linked = 'RAG implementation. We compare the trained model against a RAG system. We rerank these chunks and select the top-8 as context.'
+        for protocol, cutoff in ((alternative, None), (alternative + '\n' + linked, 8),
+                                 (linked + '\n' + linked.replace('top-8', 'top-4'), None)):
+            with self.subTest(cutoff=cutoff):
+                payload = self.extract(grid(), METHOD + '\n' + protocol)
+                configurations = payload['configurations']
+                self.assertEqual({c['top_k'] for c in configurations if c['rag_variant'] == 'Ours + RAG'}, {cutoff})
+                self.assertTrue(all(c['top_k'] is None for c in configurations if c['rag_variant'] == 'Ours'))

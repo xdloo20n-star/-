@@ -151,10 +151,10 @@ class OpinionSupplementTest(unittest.TestCase):
 
 
 class OpinionMethodTest(unittest.TestCase):
-    def ablation_page(self, misplaced=False):
+    def ablation_page(self, misplaced=False, *, ambiguous=False):
         caption = ("Table 8: Entity-Split-Only ablation at k=20 (Mistral\n"
                    "Large). Bold = highest per metric, * = p<0.001 vs.\nEntity-Split.")
-        return positioned_grid(14, caption, [
+        page = positioned_grid(14, caption, [
             (419, list(zip((317, 335, 380, 435, 458, 477, 508), caption.splitlines()[0].split(), strict=True))),
             (431, list(zip((321, 352, 369, 390, 415, 439, 460, 469, 493, 521), caption.splitlines()[1].split(),
                            strict=True))),
@@ -165,6 +165,8 @@ class OpinionMethodTest(unittest.TestCase):
             (493, [(331, "Entity-Split"), (363, "Only"), (400, "7.37"), (448, "10.27"), (504, "3.5")]),
             (503, [(317, "Full"), (341, "O-RAG"), (423 if misplaced else 400, "8.11*"), (448, "10.94*"), (504, "4.1*")]),
         ])
+        method = "Significance is assessed with the Wilcoxon signed-rank test."
+        return page if ambiguous else replace(page, reading_text=f"{method}\n{caption}")
 
     def retrieval_page(self, *, bad_group=False):
         caption = "Table 11: Semantic-only vs. hybrid retrieval at k=20.\nBold = p<0.05, * = p<0.001."
@@ -200,6 +202,19 @@ class OpinionMethodTest(unittest.TestCase):
     def test_entity_split_grid_rejects_unaligned_ablation_score(self):
         self.assertEqual(read_opinion_tables([self.ablation_page(misplaced=True)], []), [])
 
+    def test_entity_split_p_bound_uses_star_and_explicit_comparator(self):
+        payload = extract_publication(PDF({"Title": "Opinion-Enriched RAG"}, [self.ablation_page()]))
+        result, config, dataset, source = result_at(payload, "Table 8", "Full O-RAG", "Sent-Int σ / *")
+        self.assertEqual((result["metric_name"], result["metric_variant"], result["raw_value"], result["reported_value"],
+                          result["metric_k"], config["note"], dataset["dataset_name"], source["bbox"]),
+                         ("p-value bound", "Wilcoxon signed-rank; Sentiment-Intensity sigma; Enriched vs Entity-Split Only",
+                          "<0.001", None, 20, "Opinion extraction: Mistral Large", "E-commerce seller forums",
+                          (398 / 595, 501 / 842, 402 / 595, 505 / 842)))
+
+    def test_entity_split_star_without_identified_test_leaves_scores_only(self):
+        tables = read_opinion_tables([self.ablation_page(ambiguous=True)], [])
+        self.assertEqual(sum(len(table.columns) for table in tables), 9)
+
     def test_retrieval_grid_preserves_group_and_signed_change(self):
         payload = extract_publication(PDF({"Title": "Opinion-Enriched RAG"}, [self.retrieval_page()]))
         self.assertEqual(len(payload["results"]), 36)
@@ -212,6 +227,100 @@ class OpinionMethodTest(unittest.TestCase):
 
     def test_retrieval_grid_rejects_unaligned_group_headings(self):
         self.assertEqual(read_opinion_tables([self.retrieval_page(bad_group=True)], []), [])
+
+
+class OpinionReferenceDeltaTest(unittest.TestCase):
+    model_list = "Mistral Large, Qwen 235B, and Claude Sonnet 4.5."
+    appendix_link = ("Cross-model consistency. The Full O-RAG improvement over Raw KB is consistent across extraction "
+                     "models: Mistral Large (+24.2% Sent-Int\nσ), Qwen 235B (+27.4%), and Claude Sonnet 4.5\n"
+                     "(+26.8%), confirming the approach is not dependent on a specific LLM (detailed in Appendix B).")
+
+    def main_page(self, *, misaligned=False):
+        lines = MAIN.splitlines()[:3]
+        rows = [
+            (77, list(zip((317, 336, 363, 400, 423, 441, 471, 508), lines[0].split(), strict=True))),
+            (89, list(zip((321, 355, 396, 443, 476, 505), lines[1].split(), strict=True))),
+            (101, list(zip((329, 362, 387, 416, 430, 452, 474, 481, 505), lines[2].split(), strict=True))),
+            (126, list(zip((332, 404, 421, 444, 461, 493), "Metric Raw KB Enr. KB ∆".split(), strict=True))),
+        ]
+        for y, printed, values in (
+            (141, "Entity Match (%)", "24.8 35.4 +42.7%*"), (151, "Sent-Int σ", "9.12 11.56 +26.8%*"),
+            (161, "Biz Impact σ", "10.55 12.08 +14.5%"), (171, "Emot. Markers", "7.2 8.9 +23.6%*"),
+            (187, "Revenue Band (%)", "78.3 68.1 −13.0%*"), (197, "Tenure (%)", "81.2 75.6 −6.9%"),
+            (207, "Evidence (%)", "44.3 46.4 +4.7%"),
+        ):
+            rows.append((y, [*zip((330, 354, 379), printed.split()),
+                             *zip((411, 451, 480 if misaligned and y == 207 else 493), values.split(), strict=True)]))
+        return positioned_grid(6, MAIN, rows)
+
+    def test_reference_deltas_keep_cell_and_link_star_to_caption_bound(self):
+        payload = extract_publication(PDF({"Title": "Opinion-Enriched RAG"}, [self.main_page(), depth_page(repeat=True)]))
+        self.assertEqual(sum(bool(row.get("duplicate_of")) for row in payload["results"]), 14)
+        result, config, dataset, source = result_at(payload, "Table 2", "Revenue Band (%)", "∆")
+        self.assertEqual((result["metric_name"], result["raw_value"], result["raw_unit"], result["reported_value"],
+                          config["top_k"], config["retrieval_method"], dataset["dataset_name"], source["bbox"]),
+                         ("Revenue Band Coverage relative change", "−13.0%*", "%", -13, 20, "hybrid",
+                          "E-commerce seller forums", (491 / 595, 185 / 842, 495 / 595, 189 / 842)))
+        bound, _, _, bound_source = result_at(payload, "Table 2", "Revenue Band (%)", "∆ / *")
+        self.assertEqual((bound["metric_name"], bound["metric_variant"], bound["raw_value"], bound["reported_value"],
+                          bound["sample_size"], bound_source["bbox"]),
+                         ("p-value bound", "Wilcoxon signed-rank; Revenue Band Coverage; Enriched vs Raw", "<0.001",
+                          None, 48, source["bbox"]))
+
+    def test_reference_delta_overlapping_wrong_column_does_not_change_original_rows(self):
+        payload = extract_publication(PDF({"Title": "Opinion-Enriched RAG"}, [self.main_page(misaligned=True),
+                                                                              depth_page(repeat=True)]))
+        self.assertEqual(sum(bool(row.get("duplicate_of")) for row in payload["results"]), 14)
+        self.assertEqual(len(payload["results"]), 28)
+
+    def model_page(self, *, different=False):
+        caption = ("Table 5: Retrieval diversity improvements (∆ vs. Raw\n"
+                   "KB) across opinion extraction LLMs (k=20, hybrid).")
+        rows = [
+            (370, list(zip((82, 99, 125, 163, 212, 249, 263, 280), caption.splitlines()[0].split(), strict=True))),
+            (382, list(zip((79, 103, 133, 171, 206, 235, 268), caption.splitlines()[1].split(), strict=True))),
+            (406, [(97, "Metric"), (178, "Mistral"), (216, "Qwen"), (258, "Sonnet")]),
+        ]
+        for i, (label, values) in enumerate([
+            ("Sent-Int σ", "+24.2% +27.4% +26.8%*"), ("Biz Impact σ", "+18.4% +12.4% +14.5%"),
+            ("Revenue Band Cov.", "−17.5% −19.0% −13.0%*"), ("Tenure Cov.", "−3.9% −3.6% −6.9%"),
+            ("Evidence Cov.", "+9.4% +8.9% +4.8%" if different else "+9.4% +8.9% +4.7%"),
+            ("Emot. Markers", "+28.1% +20.0% +23.6%*"),
+        ]):
+            rows.append((422 + 10 * i, [*zip((91, 116, 143), label.split()),
+                                        *zip((178, 216, 258), values.split(), strict=True)]))
+        return positioned_grid(14, caption, rows)
+
+    def test_extraction_models_keep_signs_and_link_only_the_complete_sonnet_repeat(self):
+        payload = extract_publication(PDF({"Title": "Opinion-Enriched RAG"},
+                                          [self.main_page(), Page(7, self.appendix_link, "text_match"),
+                                           Page(13, self.model_list, "text_match"), self.model_page()]))
+        result, config, dataset, source = result_at(payload, "Table 5", "Revenue Band Cov.", "Mistral")
+        self.assertEqual((result["metric_name"], result["raw_value"], result["raw_unit"], result["metric_k"],
+                          config["note"], config["retrieval_method"], dataset["dataset_name"], source["bbox"]),
+                         ("Revenue Band Coverage relative change", "−17.5%", "%", 20, "Opinion extraction: Mistral Large",
+                          "hybrid", "E-commerce seller forums", (176 / 595, 440 / 842, 180 / 595, 444 / 842)))
+        model_source = next(e for e in payload["evidence"] if e["entity_id"] == config["config_id"] and e["field"] == "note")
+        self.assertEqual((model_source["page"], model_source["fragment"], model_source["verification"]),
+                         (13, "Mistral Large", "text_match"))
+        original, _, _, _ = result_at(payload, "Table 2", "Revenue Band (%)", "∆")
+        repeated, _, _, _ = result_at(payload, "Table 5", "Revenue Band Cov.", "Sonnet")
+        self.assertEqual(repeated["duplicate_of"], original["result_id"])
+        self.assertEqual(sum(bool(row.get("duplicate_of")) for row in payload["results"]), 6)
+
+    def test_extraction_models_keep_a_changed_sonnet_grid_separate(self):
+        payload = extract_publication(PDF({"Title": "Opinion-Enriched RAG"}, [self.main_page(),
+                        Page(7, self.appendix_link, "text_match"), Page(13, self.model_list, "text_match"),
+                        self.model_page(different=True)]))
+        changed, _, _, _ = result_at(payload, "Table 5", "Evidence Cov.", "Sonnet")
+        self.assertEqual(changed["raw_value"], "+4.8%")
+        self.assertFalse(any(row.get("duplicate_of") for row in payload["results"]))
+
+    def test_extraction_models_keep_coincident_cells_without_documented_linkage(self):
+        payload = extract_publication(PDF({"Title": "Opinion-Enriched RAG"},
+                                          [self.main_page(), Page(13, self.model_list, "text_match"), self.model_page()]))
+        sonnet, _, data, _ = result_at(payload, "Table 5", "Sent-Int σ", "Sonnet")
+        self.assertEqual((sonnet["raw_value"], sonnet.get("duplicate_of"), data["dataset_name"]), ("+26.8%*", None, None))
 
 
 class OpinionComparisonTest(unittest.TestCase):

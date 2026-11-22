@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 from pdf_pages import Page, Word
 from scan_ocr import ScanImage
-from training_scan import bounded_checkpoint_cells, overhead_table, time_aligned_tables
+from training_scan import bounded_checkpoint_cells, bounded_overhead_cells, overhead_table, time_aligned_tables
 
 
 def words(*rows):
@@ -11,6 +11,34 @@ def words(*rows):
 
 
 class ScannedTrainingTablesTest(unittest.TestCase):
+    def test_bounded_overhead_keeps_confirmed_step_time_and_rejects_disputed_gpu(self):
+        def raster(dpi):
+            width, height = round(1183 * dpi / 405), round(538 * dpi / 405)
+            return ScanImage(width, height, b"\xff" * (width * height), dpi,
+                             round(3351 * dpi / 405), round(4737 * dpi / 405))
+
+        first, second, third = (raster(dpi) for dpi in (405, 495, 570))
+        centers = [286, 522, 822, 1123]
+        readings = {
+            405: iter(("91.89", "642", "93.97", "0.862")),
+            495: iter(("91.89", "042", "93,97", "82", "1", "6.42", "0.97", "0.802")),
+            570: iter(("91.89", "642", "93.97", "082", "", "6.42", "98.97", "0.862")),
+        }
+
+        def recognize(image, engine, psm=6, digits_only=False):
+            if not digits_only:
+                return words((20, [(55, "Search-Ri"), (145, "PPO")]))
+            value = next(readings[image.dpi])
+            return words((20, [(55, value)])) if value else ()
+
+        with patch("training_scan.recognize", side_effect=recognize):
+            result = bounded_overhead_cells((first, second, third), "tesseract", centers)
+        self.assertEqual({i: raw for i, (raw, _) in result.items()}, {0: "91.89", 1: "6.42"})
+        self.assertEqual(result[0][1], (277 / 3351, 106 / 4737, 367 / 3351, 144 / 4737))
+
+        with patch("training_scan.recognize", return_value=words((20, [(55, "OAS")]))):
+            self.assertEqual(bounded_overhead_cells((first, second, third), "tesseract", centers), {})
+
     def test_computational_overhead_keeps_cells_conditions_and_printed_units(self):
         page = Page(19, "Table 8: Computational overhead on NQ with Qwen2.5-", "ocr_match")
         layout = words(

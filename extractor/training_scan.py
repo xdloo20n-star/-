@@ -1,6 +1,7 @@
 """Recover values from locally recognized training-table scans."""
 
 from collections.abc import Callable
+from dataclasses import replace
 import re
 from statistics import median
 
@@ -22,6 +23,9 @@ OVERHEAD_COLUMNS = (
 )
 DECIMAL = re.compile(r"\d+\.\d+")
 UNIT_TOKEN = re.compile(r"\((s|h|gib|mib)\)$", re.I)
+OVERHEAD_CELL_REGIONS = ((322, 123, 45), (514, 123, 47), (822, 123, 45), (1125, 130, 50))
+OVERHEAD_PROFILES = {405: ((2, 18, 228, False),), 495: ((0, 16, 171, True), (0, 16, 194, True)),
+                     570: ((0, 16, 171, True), (0, 16, 194, True))}
 TIME_ALIGNED = re.compile(r"^\s*(Table\s+\d+)[:.]\s*Time-aligned\b", re.I | re.M)
 ALIGNED_CAPTION = re.compile(
     r"(Table\s+\d+):\s*Time-aligned task, training-diagnostic, and retrieval-behavior statistics on the fixed "
@@ -70,7 +74,8 @@ def text(line: list[Word]) -> str:
     return " ".join(word.text for word in line)
 
 
-def overhead_table(page: Page, words: tuple[Word, ...], read_cell: Callable[[Word], tuple[str, Bounds] | None]) -> list[Table]:
+def overhead_table(page: Page, words: tuple[Word, ...], read_cell: Callable[[Word], Cell | None], *,
+                   read_missing: Callable[[list[float]], dict[int, Cell]] | None = None) -> list[Table]:
     lines = ordered_lines(words)
     caption = OVERHEAD_CAPTION.search(" ".join(text(line) for line in lines))
     if not caption:
@@ -101,25 +106,69 @@ def overhead_table(page: Page, words: tuple[Word, ...], read_cell: Callable[[Wor
         height = prefix[0].y1 - prefix[0].y0
         cells = [word for word in line if word.x >= method_limit and abs(word.y - row_y) <= height * 0.5
                  and word.y1 - word.y0 <= height * 1.6]
-        if len(cells) != len(centers):
-            continue
-        if any(abs(center - cell.x) > column_tolerance for center, cell in zip(centers, cells, strict=True)):
-            continue
+        recognized = {}
+        if len(cells) == len(centers) and all(abs(center - cell.x) <= column_tolerance
+                                              for center, cell in zip(centers, cells, strict=True)):
+            recognized = {col: reading for col, cell in enumerate(cells) if (reading := read_cell(cell)) is not None}
+        name = "OAS" if method[0] == "OAS" else "Search-R1 PPO"
+        if read_missing is not None and name == "Search-R1 PPO" and len(recognized) < len(centers):
+            recognized = {**read_missing(centers), **recognized}
         values, columns, boxes = [], [], []
-        for cell, (printed, metric, unit) in zip(cells, OVERHEAD_COLUMNS, strict=True):
-            recognized = read_cell(cell)
-            if recognized is None:
-                continue
-            value, box = recognized
+        for col, (value, box) in sorted(recognized.items()):
+            printed, metric, unit = OVERHEAD_COLUMNS[col]
             values.append(value)
             boxes.append(box)
-            columns.append(Column(Header(printed, metric, cell.x, None, unit), dataset, generator=model,
+            columns.append(Column(Header(printed, metric, centers[col], None, unit), dataset, generator=model,
                                   source_label=printed, direction="lower_is_better"))
         if values:
-            name = "OAS" if method[0] == "OAS" else "Search-R1 PPO"
             tables.append(Table(page, label, caption[0], offset, columns, [(name, values)], top_k=int(budget),
                                 top_k_evidence=(page, budget_fragment), value_bboxes=(tuple(boxes),)))
     return tables
+
+
+def bounded_overhead_cells(images: tuple[ScanImage, ...], engine: str, centers: list[float]) -> dict[int, Cell]:
+    # The first numeric center is offset from its small in-header unit. The
+    # other three centers align directly with the observed unit headings.
+    if any(abs(center - expected) > 12 for center, expected in zip(centers, (286, 522, 822, 1123), strict=True)):
+        return {}
+
+    def bounds(image, box):
+        return tuple(round(p * image.dpi / 405) for p in box)
+
+    def padded(image):
+        margin = b"\xff" * 16
+        width = image.width + 2 * len(margin)
+        border = b"\xff" * width * len(margin)
+        rows = (image.pixels[y * image.width:(y + 1) * image.width] for y in range(image.height))
+        return replace(image, width=width, height=image.height + 2 * len(margin),
+                       pixels=border + b"".join(margin + row + margin for row in rows) + border)
+
+    readings: dict[int, dict[str, dict[int, Bounds]]] = {}
+    for image in images:
+        label = image.crop(*bounds(image, (9, 106, 194, 143)))
+        label_text = " ".join(w.text for w in recognize(label, engine, psm=7))
+        if not re.fullmatch(r"Search-R[1Ilt]\s+PPO", label_text, re.I):
+            continue
+        for shift, radius, white, hard in OVERHEAD_PROFILES[image.dpi]:
+            for col, (x, y, width) in enumerate(OVERHEAD_CELL_REGIONS):
+                crop_box = bounds(image, (x - width, y + shift - radius, min(x + width, 1181), y + shift + radius))
+                crop = image.crop(*crop_box)
+                if hard:
+                    palette = bytes(0 if p < white else 255 for p in range(256))
+                    crop = replace(crop, pixels=crop.pixels.translate(palette))
+                else:
+                    crop = contrast(crop, white)
+                raw = "".join(w.text for w in recognize(padded(crop), engine, psm=7, digits_only=True))
+                if DECIMAL.fullmatch(raw):
+                    readings.setdefault(col, {}).setdefault(raw, {})[image.dpi] = image.source_bbox(*crop_box)
+
+    confirmed = {}
+    for col, candidates in readings.items():
+        if len(candidates) == 1:
+            raw, boxes = next(iter(candidates.items()))
+            if len(boxes) >= 2:
+                confirmed[col] = raw, next(iter(boxes.values()))
+    return confirmed
 
 
 def overhead_cell(image: ScanImage, alternate: ScanImage, alternate_words: tuple[Word, ...],
@@ -351,8 +400,13 @@ def read_training_scan_tables(pages: list[Page], tables: list[Table]) -> list[Ta
                 image, precise_words = precise
                 return any(word.text == raw and inside_box(image, word, box) for word in precise_words)
 
+            def read_missing(centers):
+                second = deskew(scan_region(page.scan, bounds, dpi=495))
+                return bounded_overhead_cells((crop, second, alternate), page.scan.engine, centers)
+
             found.extend(overhead_table(page, words, lambda word: overhead_cell(
-                crop, alternate, alternate_words, high_resolution_matches, page.scan.engine, word)))
+                crop, alternate, alternate_words, high_resolution_matches, page.scan.engine, word),
+                read_missing=read_missing))
         except (ExtractionError, ValueError):
             continue
     return found

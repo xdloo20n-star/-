@@ -90,6 +90,21 @@ PAIRED = page(
 PAIR_SCOPE = Page(17, "", "text_match", "We supplement Table 1 with bootstrap confidence intervals and per-dataset "
                   "paired t-tests, computed on per-question results against PRO-STEP.")
 
+# Table 6 interleaves counts and rates above a right-column caption.
+PRM_COUNTS = page(
+    15,
+    row(402, (303, "Step Type"), (360, "Count (%)"), (430, "GOOD"), (490, "BAD")),
+    row(414, (303, "Search"), (350, "78,055"), (384, "(71.2%)"), (418, "55,710"), (441, "(71.4%)"),
+        (472, "22,345"), (505, "(28.6%)"), glyph_width=2.7),
+    row(422, (303, "Answer"), (350, "31,062"), (384, "(28.3%)"), (418, "14,436"), (441, "(46.5%)"),
+        (472, "16,626"), (505, "(53.5%)"), glyph_width=2.7),
+    row(430, (303, "Reason"), (360, "547"), (384, "(0.5%)"), (424, "144"), (441, "(26.3%)"),
+        (474, "403"), (505, "(73.7%)"), glyph_width=2.7),
+    row(443, (303, "Total"), (347, "109,664"), (384, "(100%)"), (416, "70,290"), (441, "(64.1%)"),
+        (472, "39,374"), (505, "(35.9%)"), glyph_width=2.7),
+    row(465, (303, "Table 6: Statistics of the PRM training corpus:")),
+)
+
 
 def parsed(pages):
     return [(table.label, table.config_name, name, column, raw, bbox)
@@ -152,7 +167,7 @@ class ProstepAppendixTests(unittest.TestCase):
 
     def test_paired_t_tests_keep_comparator_and_test_size(self):
         results = parsed([PAIR_SCOPE, PAIRED])
-        exact, bound, _ = [r for r in results if r[2] == "HotpotQA"]
+        exact, bound, _ = [r for r in results if r[2] == "HotpotQA" and r[3].header.name == "Paired t-test p"]
         self.assertEqual((exact[0], exact[1], exact[3].header.name, exact[4]),
                          ("Table 16", "PRO-STEP", "Paired t-test p", "0.10"))
         self.assertEqual((exact[3].metric_variant, exact[3].data_split, exact[3].sample_size),
@@ -160,10 +175,32 @@ class ProstepAppendixTests(unittest.TestCase):
         self.assertEqual((bound[3].metric_variant, bound[4]), ("vs ReasonRAG upper exclusive bound", "<10−6"))
         self.assertGreater(bound[5][0], exact[5][2])
 
+    def test_paired_em_differences_keep_printed_signs_and_separate_p_columns(self):
+        results = parsed([PAIR_SCOPE, PAIRED])
+        first = [(r[3].metric_variant, r[4], r[3].header.unit, r[5]) for r in results
+                 if r[2] == "PopQA" and r[3].header.name == "Delta EM"]
+        self.assertEqual([r[:3] for r in first], [("vs Search-R1", "-0.18", None),
+                                                  ("vs ReasonRAG", "+2.69", None), ("vs StepSearch", "+1.23", None)])
+        self.assertLess(first[0][3][2], first[1][3][0])
+
     def test_paired_t_test_rejects_a_cell_crossing_comparator_columns(self):
         displaced = replace(PAIRED, words=tuple(replace(word, x0=word.x0 + 30, x1=word.x1 + 30)
                                                if word.text == "+2.36," else word for word in PAIRED.words))
         self.assertEqual(parsed([PAIR_SCOPE, displaced]), [])
+
+    def test_prm_counts_keep_printed_grouping_and_good_bad_conditions(self):
+        results = parsed([PRM_COUNTS])
+        self.assertEqual(len(results), 12)
+        search = [r for r in results if r[3].metric_variant == "Search"]
+        self.assertEqual([(r[3].header.name, r[4]) for r in search],
+                         [("Step count", "78,055"), ("GOOD count", "55,710"), ("BAD count", "22,345")])
+        self.assertTrue(all(r[3].grouped_digits and r[3].header.unit is None for r in search))
+        self.assertGreater(search[0][5][0], 0.5)
+
+    def test_prm_count_totals_reject_misattributed_cell(self):
+        altered = replace(PRM_COUNTS, words=tuple(replace(w, text="404") if w.text == "403" else w
+                                                for w in PRM_COUNTS.words))
+        self.assertEqual(parsed([altered]), [])
 
 
 if __name__ == "__main__":

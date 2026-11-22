@@ -75,6 +75,7 @@ average gain of 5.4% over the baseline.
 """
         statement = "Table 5 presents the breakdown results for the baseline and proposed method."
         for text, expected in ((grid, "macro mean across 2 benchmarks"),
+                               (grid.replace("macro-\naverage", "macroaverage"), "macro mean across 2 benchmarks"),
                                (grid.replace("macro-\naverage", "reported"), "mean")):
             payload = extract_publication(PDF({}, [Page(6, text, "text_match"), Page(12, statement, "text_match")]))
             result, config, dataset, source = self.find(payload, "57.1%", "Factuality")

@@ -6,7 +6,7 @@ import re
 
 from failure_rates import visual_rows
 from grouped_scores import native_evidence
-from native_benchmark_tables import normalized_boxes, positioned_caption, words_text
+from native_benchmark_tables import body_above, normalized_boxes, positioned_caption, words_text
 from paired_scores import MAIN_BACKBONE
 from pdf_pages import Page, Word
 from prostep_context import RETRIEVAL
@@ -22,6 +22,10 @@ STRATA = re.compile(r"Per-step-type agreement on the \d+-sample\b", re.I)
 AUDIT_SCOPE = re.compile(r"\bQwQ-32B-labeled trajectories \(held-out from PRM training\)", re.I)
 AUDIT_CONFIG = "PRM supervision statistics"
 AUDIT_DATASET = "Frontier-label audit"
+PRM_COUNTS = re.compile(r"Statistics of the PRM training corpus:", re.I)
+PRM_LABELER = re.compile(r"\bLabels assigned by (QwQ-32B) under the R1[–-]R6 rubric\b", re.I)
+PRM_ACTIONS = ("Search", "Answer", "Reason", "Total")
+PRM_METRICS = (("Count (%) / count", "Step count"), ("GOOD / count", "GOOD count"), ("BAD / count", "BAD count"))
 MARKERS = re.compile(r"Results at the (\d+B) scale \(EM / F1, %\)\.", re.I)
 STAR_LEGEND = re.compile(r"[“\"]\*[”\"] denotes p (<)\s*(0\.\d+) against (Search-R1)\.", re.I)
 MODEL_3B = re.compile(r"\bat a smaller model\s+scale \((Qwen2\.5-3B-Instruct)\)", re.I)
@@ -38,6 +42,7 @@ SIGNIFICANCE = re.compile(r"(?:NS|[⋆*]+)")
 INTEGER = re.compile(r"\d+")
 COUNT = re.compile(r"\d+|\d{1,3}(?:,\d{3})+")
 PERCENT = re.compile(r"\d+(?:\.\d+)?%")
+PAREN_PERCENT = re.compile(r"\((\d+(?:\.\d+)?)%\)")
 KAPPA = re.compile(r"[−-]?(?:0\.\d+|1(?:\.0+)?|0)")
 SCORE = re.compile(r"\d{1,2}\.\d+\*?|100\.0+\*?")
 EXACT_P = re.compile(r"(?:0\.\d+|1(?:\.0+)?|0)")
@@ -60,6 +65,10 @@ def read_prostep_appendix(pages: list[Page], known: list[Table]) -> list[Table]:
         for locator in locators:
             label = locator[1]
             prefix = locator.string[locator.end():].lstrip()
+            if PRM_COUNTS.match(prefix) and (page.number, label.casefold()) not in occupied:
+                anchor = positioned_caption(rows, label, PRM_COUNTS)
+                if anchor:
+                    tables.extend(prm_counts(page, label, anchor, rows))
             for pattern, header, height, read, context in (
                 (AUDIT, "Metric Value", 124, audit_summary, scope),
                 (STRATA, "Step type N Agreement Cohen’s κ", 105, audit_strata, scope),
@@ -108,6 +117,49 @@ def audit_split(cells, scope):
         return cells
     return [(replace(column, data_split="held out from PRM training", data_split_evidence=(scope[0], scope[1][0])),
              value, word) for column, value, word in cells]
+
+
+def prm_counts(page, label, anchor, rows):
+    middle = page.size[0] / 2
+    left, right = (0, middle) if anchor.x < middle else (middle, page.size[0])
+    grid = body_above(rows, anchor, left, right, 76)
+    headings = [i for i, row in enumerate(grid) if words_text(row) == "Step Type Count (%) GOOD BAD"]
+    if len(headings) != 1 or headings[0] + len(PRM_ACTIONS) + 1 != len(grid):
+        return []
+    header, *body = grid[headings[0]:]
+    centers = ((header[2].x + header[3].x) / 2, header[4].x, header[5].x)
+    total = int(body[-1][1].text.replace(",", "")) if len(body[-1]) == 7 and COUNT.fullmatch(body[-1][1].text) else 0
+    if total <= 0:
+        return []
+    caption = f"{label}: Statistics of the PRM training corpus:"
+    labeler = source_statement([page], PRM_LABELER)
+    tables, counts = [], []
+    for expected, row in zip(PRM_ACTIONS, body, strict=True):
+        if len(row) != 7 or row[0].text != expected or any(not COUNT.fullmatch(w.text) for w in row[1::2]):
+            return []
+        words, percents = row[1::2], row[2::2]
+        values = [int(w.text.replace(",", "")) for w in words]
+        steps, good, bad = values
+        if not 0 < steps <= total or good + bad != steps:
+            return []
+        for word, rate, center, value, size in zip(words, percents, centers, values, (total, steps, steps), strict=True):
+            if abs((word.x + rate.x) / 2 - center) > 8 or not matches_fraction(rate.text, value, size):
+                return []
+        counts.append(values)
+        cells = [cell([word], column, metric, "PRM training corpus", metric_variant=expected,
+                      metric_variant_evidence=(page, expected), grouped_digits=True, data_split="train",
+                      data_split_evidence=(page, caption), generator=labeler[1][1] if labeler else None,
+                      generator_evidence=(labeler[0], labeler[1][0]) if labeler else None)
+                 for word, (column, metric) in zip(words, PRM_METRICS, strict=True)]
+        tables.append(cell_row(page, label, caption, expected, cells, config_name=AUDIT_CONFIG))
+    return tables if [sum(values) for values in zip(*counts[:-1], strict=True)] == counts[-1] else []
+
+
+def matches_fraction(raw, count, size):
+    if (match := PAREN_PERCENT.fullmatch(raw)) is None:
+        return False
+    percent = Decimal(match[1])
+    return abs(percent - 100 * Decimal(count) / size) <= Decimal("0.5").scaleb(percent.as_tuple().exponent)
 
 
 def audit_summary(page, label, caption, _header, body, scope):
@@ -271,13 +323,18 @@ def paired_tests(page, label, caption, header, body, setup):
                 return []
             raw, words = probability
             variant = f"vs {baseline.text}"
+            conditions = {
+                "metric_variant_evidence": (comparison[0], comparison[1][0]),
+                "data_split": "test", "data_split_evidence": (page, protocol[0]),
+                "sample_size": size, "sample_size_evidence": (page, count.text),
+                "generator": generator, "generator_evidence": backbone,
+            }
+            cells.append(cell(row[start:start + 1], f"vs. {baseline.text} / Δ EM", "Delta EM", dataset.text,
+                              raw=row[start].text.removesuffix(","), metric_variant=variant, **conditions))
             if raw.startswith("<"):
                 variant += " upper exclusive bound"
             cells.append(cell(words, f"vs. {baseline.text} / p", "Paired t-test p", dataset.text, raw=raw,
-                              metric_variant=variant, metric_variant_evidence=(comparison[0], comparison[1][0]),
-                              data_split="test", data_split_evidence=(page, protocol[0]),
-                              sample_size=size, sample_size_evidence=(page, count.text),
-                              generator=generator, generator_evidence=backbone))
+                              metric_variant=variant, **conditions))
         tables.append(cell_row(page, label, caption, dataset.text, cells, config_name="PRO-STEP",
                                retriever_model=retrieval[1][1] if retrieval else None,
                                top_k=int(retrieval[1][2]) if retrieval else None,

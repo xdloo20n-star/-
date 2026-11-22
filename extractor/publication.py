@@ -11,6 +11,7 @@ from context_recall_tables import read_context_recall_tables
 from coda_tables import read_coda_tables
 
 from benchmark_distribution import read_benchmark_distributions
+from efficiency_summary import read_efficiency_summaries
 
 from failure_rates import failure_rate_definition
 from factuality_tables import read_factuality_tables
@@ -30,6 +31,7 @@ from reasoning_tables import read_reasoning_tables
 from retrieval_tables import read_retrieval_tables
 from scanned_score_tables import read_scanned_score_tables
 from synthetic_accuracy import read_synthetic_accuracy
+from threadrag_tables import read_threadrag_tables
 from training_scan import read_training_scan_tables
 from training_scan_pairs import read_training_scan_pairs
 from training_tables import read_training_tables
@@ -300,9 +302,11 @@ def extract_publication(pdf: PDF, *, source_path: Path | None = None) -> dict[st
     extracted_tables += read_knowledge_benchmarks(pdf.pages, extracted_tables)
     extracted_tables += read_watermark_tables(pdf.pages, extracted_tables)
     extracted_tables += read_retrieval_tables(pdf.pages, extracted_tables)
+    extracted_tables = read_efficiency_summaries(pdf.pages, extracted_tables)
     extracted_tables += read_benchmark_distributions(pdf.pages, extracted_tables)
     extracted_tables += read_native_benchmark_tables(pdf.pages, extracted_tables)
     extracted_tables += read_prostep_appendix(pdf.pages, extracted_tables)
+    extracted_tables += read_threadrag_tables(pdf.pages, extracted_tables)
     extracted_tables = read_synthetic_accuracy(pdf.pages, extracted_tables)
     extracted_tables += read_training_tables(pdf.pages, extracted_tables)
     extracted_tables += read_training_scan_tables(pdf.pages, extracted_tables)
@@ -428,14 +432,15 @@ def add_histogram_figures(payload: Payload, figures: tuple[HistogramFigure, ...]
 
 def scale_and_value(raw: str, header_unit: str | None, *,
                     grouped_digits: bool = False) -> tuple[str | None, str | None, float | None, str]:
-    suffix = CELL_UNIT.search(raw)
-    unit = "%" if raw.endswith("%") else suffix[1] if suffix and header_unit is None else header_unit
+    cell = raw[:-1] if raw.endswith(("%*", "%∗")) else raw
+    suffix = CELL_UNIT.search(cell)
+    unit = "%" if cell.endswith("%") else header_unit or (suffix[1] if suffix else None)
     scale = {"%": "percent", "percent": "percent", "fraction": "fraction"}.get((unit or "").lower())
     if raw in MISSING:
         return unit, scale, None, "absent"
     if suffix and suffix[1] != unit:
         return unit, scale, None, "present_not_extractable"
-    cell = (raw[:suffix.start()] if suffix else raw.removesuffix("%")).strip()
+    cell = (cell[:suffix.start()] if suffix else cell.removesuffix("%")).strip()
     number = cell.replace("−", "-").replace(",", "" if grouped_digits else ".")
     if NONSCALAR_VALUE.fullmatch(number):
         return unit, scale, None, "extracted"
@@ -734,8 +739,11 @@ def add_configuration(payload: Payload, table: Table, row: str, name: str | None
         payload.cite("configuration", config_id, "retriever_model", table.page, table.retriever_model, table=table.label)
     if table.retrieval_method:
         payload.cite("configuration", config_id, "retrieval_method", table.page, table.retrieval_method, table=table.label)
-    if table.config_note:
-        payload.cite("configuration", config_id, "note", table.page, table.config_note, table=table.label)
+    if table.config_note_evidence:
+        payload.cite("configuration", config_id, "note", *table.config_note_evidence)
+    elif table.config_note:
+        payload.cite("configuration", config_id, "note", table.page, table.config_note,
+                     table=table.label, table_row=row_locator)
     if column.generator_evidence:
         payload.cite("configuration", config_id, "generator_model", *column.generator_evidence)
     elif generator:

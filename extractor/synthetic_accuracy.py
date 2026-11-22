@@ -1,5 +1,6 @@
 """Read the paired accuracy grid for synthetic training with and without RAG."""
 
+from decimal import Decimal
 import re
 
 from failure_rates import visual_rows
@@ -12,7 +13,10 @@ from retrieval_tables import source_statement
 CAPTION = re.compile(r"Our training complements retrieval augmentation\.")
 DELTA_DEFINITION = re.compile(r"[∆Δ] denotes the absolute improvement of “Ours \+ RAG” over “Vanilla RAG”\.")
 EVALUATION = re.compile(r"\bWe generate eight responses per question \(n\s*=\s*8\) and report the average\s+accuracy\b")
-RAG_DEPTH = re.compile(r"\bre-?\s*rank these chunks and select\s+the top-(\d+) as context\b", re.I)
+RAG_DEPTH = re.compile(
+    r"\bRAG implementation\.\s+We compare the trained\s+model against a RAG\b.{0,420}?"
+    r"\b(re-?\s*rank these chunks and select\s+the top-(\d+) as context)\b", re.I | re.S,
+)
 MODELS = {"Llama": re.compile(r"\bLlama 3\.1 8B\s+Instruct\b"), "Qwen": re.compile(r"\bQwen3 8B\b")}
 HEADINGS = ("Ours", "Ours + RAG", "Vanilla RAG", "∆")
 SCORE = re.compile(r"(?:100(?:\.0+)?|\d{1,2}(?:\.\d+)?)%")
@@ -25,7 +29,8 @@ def read_synthetic_accuracy(pages: list[Page], tables: list[Table]) -> list[Tabl
     if evaluation is None:
         return tables
     model_sources = {name: source_statement(native, pattern) for name, pattern in MODELS.items()}
-    depth = source_statement(native, RAG_DEPTH)
+    depths = [(page, match) for page in native for match in RAG_DEPTH.finditer(page.reading_text or page.text)]
+    depth = depths[0] if depths and len({match[2] for _, match in depths}) == 1 else None
     replacements = {}
     for page in native:
         if not page.words or not CAPTION.search(page.text):
@@ -78,6 +83,11 @@ def accuracy_rows(rows: list[list[Word]], anchor: Word) -> list[tuple[str, str, 
             if not (all(SCORE.fullmatch(word.text) for word in cells[:3]) and DELTA.fullmatch(cells[3].text)
                     and all(abs(word.x1 - edge) <= 8 for word, edge in zip(cells, edges, strict=True))):
                 return []
+            combined, baseline, delta = (Decimal(cell.text.removesuffix("%").replace("−", "-")) for cell in cells[1:])
+            # Differences may have been calculated before rounding the three printed decimals.
+            margin = sum(Decimal("0.5").scaleb(n.as_tuple().exponent) for n in (combined, baseline, delta))
+            if abs(combined - baseline - delta) > margin:
+                return []
             results.append((group[0].text, expected, cells))
     return results
 
@@ -96,6 +106,6 @@ def make_cell(page, label, caption, index, dataset, model, i, value, model_sourc
     retrieval = depth if i in (1, 2) else None
     return Table(page, label, caption, index, [column], [(model, [value.text])], row_section=dataset,
                  config_name="Ours + RAG vs Vanilla RAG" if delta else heading,
-                 top_k=int(retrieval[1][1]) if retrieval else None,
-                 top_k_evidence=(retrieval[0], retrieval[1][0]) if retrieval else None,
+                 top_k=int(retrieval[1][2]) if retrieval else None,
+                 top_k_evidence=(retrieval[0], retrieval[1][1]) if retrieval else None,
                  value_bboxes=normalized_boxes(page, [value]))

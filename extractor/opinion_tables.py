@@ -49,7 +49,11 @@ DISTANCE_PREFIX = re.compile(r"Empirical W(?=\s|1)")
 HOTEL_PREFIX = re.compile(r"OpinioBank results \(public hotel reviews\)")
 SPLIT_PREFIX = re.compile(r"Entity-Split-Only ablation at k=")
 RETRIEVAL_PREFIX = re.compile(r"Semantic-only vs\. hybrid retrieval at k=")
+REFERENCE_DELTA_PREFIX = re.compile(r"Diversity metrics at k=\d+ \(hybrid retrieval,")
+EXTRACTION_MODEL_PREFIX = re.compile(r"Retrieval diversity improvements \(∆ vs\. Raw")
 GENERATION = re.compile(r"Response generation from the retrieved context\s+used (Anthropic Claude Sonnet) (4\.5)\.")
+WILCOXON = re.compile(r"Wilcoxon\s+signed-rank test")
+P_VALUE = r"(<0\.\d+)"
 HOTELS = {
     "Silverton": "OpinioBank: Silverton Las Vegas", "Silverton LV": "OpinioBank: Silverton Las Vegas",
     "Ambassador": "OpinioBank: Ambassador Bangkok", "Ambassador Bangkok": "OpinioBank: Ambassador Bangkok",
@@ -61,6 +65,18 @@ SPLIT_METRICS = tuple(METRICS[i][1] for i in (1, 2, 6))
 RETRIEVAL_METRICS = {
     "Sent-Int σ": METRICS[1], "Biz Impact σ": METRICS[2], "Revenue Band (%)": METRICS[3],
     "Tenure (%)": METRICS[4], "Evidence (%)": METRICS[5], "Emot. Markers": METRICS[6],
+}
+REFERENCE_METRICS = {"Entity Match (%)": METRICS[0], **RETRIEVAL_METRICS}
+EXTRACTION_MODELS = {"Mistral": "Mistral Large", "Qwen": "Qwen 235B", "Sonnet": "Claude Sonnet 4.5"}
+EXTRACTION_MODEL_EVIDENCE = re.compile(r"Mistral Large,\s+Qwen 235B,\s+and Claude Sonnet 4\.5")
+MODEL_APPENDIX_EVIDENCE = re.compile(
+    r"Cross-model consistency\.\s+The Full O-RAG improvement over Raw KB is consistent across extraction models:\s+"
+    r"Mistral Large \(([+−-]\d+\.\d+%) Sent-Int\s+σ\),\s+Qwen 235B \(([+−-]\d+\.\d+%)\),\s+and Claude Sonnet 4\.5\s+"
+    r"\(([+−-]\d+\.\d+%)\),[^()]{0,120}\(detailed in Appendix B\)"
+)
+EXTRACTION_MODEL_METRICS = {
+    "Sent-Int σ": METRICS[1][1], "Biz Impact σ": METRICS[2][1], "Revenue Band Cov.": METRICS[3][1],
+    "Tenure Cov.": METRICS[4][1], "Evidence Cov.": METRICS[5][1], "Emot. Markers": METRICS[6][1],
 }
 
 
@@ -122,9 +138,10 @@ def read_opinion_supplement(pages: list[Page], known: list[Table]) -> list[Table
             continue
         rows = visual_rows(page.words)
         for prefix, reader in ((DISTANCE_PREFIX, read_distance), (HOTEL_PREFIX, read_hotels),
-                               (SPLIT_PREFIX, read_split_ablation), (RETRIEVAL_PREFIX, read_retrieval_method)):
+                               (SPLIT_PREFIX, read_split_ablation), (RETRIEVAL_PREFIX, read_retrieval_method),
+                               (REFERENCE_DELTA_PREFIX, read_reference_deltas), (EXTRACTION_MODEL_PREFIX, read_model_changes)):
             for caption in re.finditer(r"(?:^ *|(?<= {2}))(Table \d+): " + prefix.pattern, page.text, re.M):
-                if (page.number, caption[1].casefold()) in occupied:
+                if prefix is not REFERENCE_DELTA_PREFIX and (page.number, caption[1].casefold()) in occupied:
                     continue
                 if anchor := positioned_caption(rows, caption[1], prefix):
                     tables.extend(reader(page, caption[1], anchor, reference))
@@ -135,7 +152,8 @@ def read_opinion_supplement(pages: list[Page], known: list[Table]) -> list[Table
                                                   generator_evidence=(page, model), generator_version_evidence=(page, version))
                                           if not column.duplicate_scope else column
                                           for column in table.columns]) for table in tables]
-    return tables
+    return link_model_changes(tables, native_evidence(pages, EXTRACTION_MODEL_EVIDENCE),
+                              native_evidence(pages, MODEL_APPENDIX_EVIDENCE))
 
 
 def opinion_grid(page: Page, anchor: Word, heading: str, count: int, *, full_width: bool = False):
@@ -238,6 +256,115 @@ def reference_scope(reference: Table | None, depth: int, metrics: tuple[str, ...
     return (reference.page.number, reference.label) if values == expected else None
 
 
+def p_bound_column(title: str, metric: str, comparison: str, marker: Word, depth: int,
+                   method: tuple[Page, str], sample_size: int | None = None) -> Column:
+    return Column(Header(title, "p-value bound", marker.x, depth, None), DATASET, source_label=f"{title} / *",
+                  metric_variant=f"Wilcoxon signed-rank; {metric}; {comparison}",
+                  metric_variant_evidence=method, sample_size=sample_size)
+
+
+def read_reference_deltas(page: Page, label: str, anchor: Word, _reference: Table | None) -> list[Table]:
+    grid = opinion_grid(page, anchor, "Metric Raw KB Enr. KB ∆", 7)
+    if not grid:
+        return []
+    caption, header, rows = grid
+    context = re.search(r"Diversity metrics at (k=(\d+)) \(hybrid retrieval, forums dataset\)\. "
+                        r"Statistical significance via Wilcoxon signed-rank test \(n=(\d+)\): "
+                        r"bold = p<0\.\d+, \* = p" + P_VALUE + r"\.", caption)
+    method = native_evidence([page], WILCOXON)
+    if not (context and method and int(context[2]) > 0 and int(context[3]) > 0):
+        return []
+    depth, sample_size = int(context[2]), int(context[3])
+    centers = ((header[1].x0 + header[2].x1) / 2, (header[3].x0 + header[4].x1) / 2, header[-1].x)
+    ordering = ("Entity Match (%)", "Sent-Int σ", "Biz Impact σ", "Emot. Markers", "Revenue Band (%)", "Tenure (%)",
+                "Evidence (%)")
+    if tuple(words_text(row[:-3]) for row in rows) != ordering:
+        return []
+    tables = []
+    for printed, row in zip(ordering, rows, strict=True):
+        raw, enriched, marked = row[-3:]
+        change = SIGNED_CHANGE.fullmatch(marked.text)
+        if (not aligned(row[-3:], centers, 6) or not change or not DECIMAL.fullmatch(raw.text)
+                or not DECIMAL.fullmatch(enriched.text) or Decimal(raw.text) == Decimal(enriched.text)
+                or (change[1].startswith("+") != (Decimal(enriched.text) > Decimal(raw.text)))):
+            return []
+        _, metric, _ = REFERENCE_METRICS[printed]
+        columns = [Column(Header("∆", f"{metric} relative change", marked.x, depth, "%"), DATASET, source_label="∆")]
+        values, cells = [marked.text], [marked]
+        if marked.text.endswith("*"):
+            columns.append(p_bound_column("∆", metric, "Enriched vs Raw", marked, depth, method, sample_size))
+            values.append(context[4])
+            cells.append(marked)
+        tables.append(Table(page, label, caption, len(tables), columns, [(printed, values)], config_name=ENRICHED_KB,
+                            family="opinion_reference_delta", top_k=depth, top_k_evidence=(page, context[1]), retrieval_method="hybrid",
+                            value_bboxes=normalized_boxes(page, cells)))
+    return tables
+
+
+def read_model_changes(page: Page, label: str, anchor: Word, _reference: Table | None) -> list[Table]:
+    grid = opinion_grid(page, anchor, "Metric Mistral Qwen Sonnet", 6)
+    if not grid:
+        return []
+    caption, heading, rows = grid
+    context = re.search(r"\(∆ vs\. Raw KB\) across opinion extraction LLMs \((k=(\d+)), hybrid\)\.", caption)
+    if not context or int(context[2]) <= 0 or [words_text(row[:-3]) for row in rows] != list(EXTRACTION_MODEL_METRICS):
+        return []
+    depth = int(context[2])
+    centers = [word.x for word in heading[1:]]
+    tables = []
+    for row, (printed, metric) in zip(rows, EXTRACTION_MODEL_METRICS.items(), strict=True):
+        cells = row[-3:]
+        if not aligned(cells, centers, 6) or not all(SIGNED_CHANGE.fullmatch(word.text) for word in cells):
+            return []
+        for word, model in zip(cells, EXTRACTION_MODELS, strict=True):
+            column = Column(Header(model, f"{metric} relative change", word.x, depth, "%"), None, source_label=model)
+            tables.append(Table(page, label, caption, len(tables), [column], [(printed, [word.text])],
+                                family="opinion_model_change", config_name=ENRICHED_KB, retrieval_method="hybrid",
+                                config_note=f"Opinion extraction: {model}", top_k=depth, top_k_evidence=(page, context[1]),
+                                value_bboxes=normalized_boxes(page, [word])))
+    return tables
+
+
+def link_model_changes(tables: list[Table], names: tuple[Page, str] | None,
+                       comparison: tuple[Page, str] | None) -> list[Table]:
+    references = [(i, table) for i, table in enumerate(tables) if table.family == "opinion_reference_delta"]
+    changes = [(i, table) for i, table in enumerate(tables) if table.family == "opinion_model_change"]
+    if not changes:
+        return tables
+    for i, table in changes:
+        model = table.columns[0].source_label
+        if names:
+            full_name = EXTRACTION_MODELS[model]
+            tables[i] = replace(table, config_note=f"Opinion extraction: {full_name}",
+                                config_note_evidence=(names[0], full_name))
+    if comparison is None:
+        return tables
+    expected_changes = dict(zip(EXTRACTION_MODELS, MODEL_APPENDIX_EVIDENCE.fullmatch(comparison[1]).groups(), strict=True))
+    named_changes = {table.columns[0].source_label: table.rows[0][1][0].removesuffix("*")
+                     for _, table in changes if table.rows[0][0] == "Sent-Int σ"}
+    if named_changes != expected_changes:
+        return tables
+    scope = {(table.page.number, table.label) for _, table in references}
+    if len(scope) != 1:
+        return tables
+    scope, = scope
+    original = {(table.top_k, table.columns[0].header.name, table.rows[0][1][0]): i for i, table in references}
+    sonnet = [(i, table) for i, table in changes if table.columns[0].source_label == "Sonnet"]
+    corresponding = [original.get((table.top_k, table.columns[0].header.name, table.rows[0][1][0])) for _, table in sonnet]
+    if len(sonnet) != len(EXTRACTION_MODEL_METRICS) or None in corresponding or len(set(corresponding)) != len(corresponding):
+        return tables
+    for (i, _), j in zip(sonnet, corresponding, strict=True):
+        reference, model = tables[j], tables[i]
+        columns = [replace(reference.columns[0], duplicate_scope=scope), *reference.columns[1:]]
+        tables[j] = replace(reference, columns=columns, config_note=model.config_note, config_note_evidence=comparison)
+        tables[i] = replace(model, columns=[replace(model.columns[0], dataset=DATASET, duplicate_scope=scope)])
+    for i, _ in changes:
+        table = tables[i]
+        if table.columns[0].dataset is None:
+            tables[i] = replace(table, columns=[replace(table.columns[0], dataset=DATASET)])
+    return tables
+
+
 def read_split_ablation(page: Page, label: str, anchor: Word, reference: Table | None) -> list[Table]:
     grid = opinion_grid(page, anchor, "KB Config Sent-Int σ Biz Impact Emot Marker", 3)
     if not grid:
@@ -247,6 +374,7 @@ def read_split_ablation(page: Page, label: str, anchor: Word, reference: Table |
     if not match or int(match[2]) <= 0:
         return []
     depth, model = int(match[2]), match[3]
+    model_source = native_evidence([page], re.compile(re.escape(model).replace(r"\ ", r"\s+")))
     row_names = ("Raw", "Entity-Split Only", "Full O-RAG")
     if [words_text(row[:-3]) for row in rows] != list(row_names):
         return []
@@ -256,6 +384,8 @@ def read_split_ablation(page: Page, label: str, anchor: Word, reference: Table |
                for row, row_values in zip(rows, values, strict=True)):
         return []
     repeated = reference_scope(reference, depth, SPLIT_METRICS, [values[0], values[2]]) if model == "Sonnet 4.5" else None
+    star = re.search(r"\* = p" + P_VALUE + r" vs\. Entity-Split\.", caption)
+    method = native_evidence([page], WILCOXON) if star else None
     tables = []
     for i, (row_name, row, row_values, config) in enumerate(zip(
         row_names, rows, values, (RAW_KB, "O-RAG Entity-Split Only", ENRICHED_KB), strict=True,
@@ -266,10 +396,18 @@ def read_split_ablation(page: Page, label: str, anchor: Word, reference: Table |
         titles = ("Sent-Int σ", "Biz Impact", "Emot Marker")
         columns = [Column(Header(title, metric, center, depth, None), DATASET, source_label=title, duplicate_scope=scope)
                    for title, metric, center in zip(titles, SPLIT_METRICS, centers, strict=True)]
+        cells = row[-3:]
+        if i == 2 and method:
+            for word, title, metric in zip(row[-3:], titles, SPLIT_METRICS, strict=True):
+                if word.text.endswith("*"):
+                    columns.append(p_bound_column(title, metric, "Enriched vs Entity-Split Only", word, depth, method))
+                    row_values.append(star[1])
+                    cells.append(word)
         tables.append(Table(page, label, caption, i, columns, [(row_name, row_values)], config_name=config,
-                            top_k=depth, top_k_evidence=(page, match[1]), value_bboxes=normalized_boxes(page, row[-3:]),
+                            top_k=depth, top_k_evidence=(page, match[1]), value_bboxes=normalized_boxes(page, cells),
                             retrieval_method="hybrid" if repeated else None,
-                            config_note=f"Opinion extraction: {model}" if not scope and i else None))
+                            config_note=f"Opinion extraction: {model}" if not scope and i else None,
+                            config_note_evidence=model_source if not scope and i else None))
     return tables
 
 

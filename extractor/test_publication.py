@@ -41,6 +41,7 @@ Table 1: Results on Natural Questions test set.
     def test_explicit_cell_units_and_approximation(self):
         cases = (
             ("+37.9pp", "pp", ("pp", None, 37.9, "extracted")),
+            ("−13.0%*", "%", ("%", "percent", -13.0, "extracted")),
             ("3.863GB", "GB", ("GB", None, 3.863, "extracted")),
             ("3.9 MB", "MB", ("MB", None, 3.9, "extracted")),
             ("∼1000", None, (None, None, 1000.0, "extracted")),

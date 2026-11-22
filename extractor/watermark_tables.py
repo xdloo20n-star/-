@@ -61,7 +61,11 @@ def read_watermark_tables(pages: list[Page], existing: list[Table]) -> list[Tabl
     datasets = {column.dataset for table in tables if table.family == "watermark_metrics"
                 for column in table.columns if column.dataset}
     if datasets:
+        from watermark_appendix import read_watermark_appendix
+
         tables.extend(read_injection_tables(native, datasets, occupied))
+        occupied.update((table.page.number, table.label.casefold()) for table in tables)
+        tables.extend(read_watermark_appendix(native, datasets, occupied))
     return tables
 
 

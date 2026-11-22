@@ -29,6 +29,31 @@ SIZE_LAYOUT = """    Table 6: Results with varying model sizes for classifiers. 
     Large (770M) 46.94 1084 54.52 30.52 66.28 65.45                               locating more resources to handle complex queries
 """
 
+ROUTER_ABLATION = """Table 2. Ablation study of router’s input features. Using all three features results in
+the highest performance on both benchmarks.
+
+                                                       Recall
+                   query centroid source-id
+                                              MIRAGE FeB4RAG
+                     ✓       ✓        ✗        81.53        89.07
+                     ✓       ✗        ✓        82.33        88.33
+                     ✓       ✓        ✓        83.35        89.70
+"""
+
+
+def router_words(bad_x=False):
+    rows = (
+        (119.8, "Table 2. Ablation study of router’s input features.", (147, 168, 193, 225, 243, 265, 295, 325)),
+        (154.2, "Recall", (357,)),
+        (159.7, "query centroid source-id", (223, 254, 291)),
+        (172.1, "MIRAGE FeB4RAG", (333, 380)),
+        (187.1, "✓ ✓ ✗ 81.53 89.07", (223, 254, 291, 359 if bad_x else 333, 380)),
+        (198.0, "✓ ✗ ✓ 82.33 88.33", (223, 254, 291, 333, 380)),
+        (209.0, "✓ ✓ ✓ 83.35 89.70", (223, 254, 291, 333, 380)),
+    )
+    return tuple(Word(text, x - 3, y - 3, x + 3, y + 3)
+                 for y, content, xs in rows for text, x in zip(content.split(), xs, strict=True))
+
 
 def size_table_words():
     rows = (
@@ -87,3 +112,15 @@ class ClassifierTableTest(unittest.TestCase):
         self.assertAlmostEqual(source["bbox"][1], 301.8 / 842)
         missing_cell = self.extract(SIZE_LAYOUT, 9, tuple(word for word in words if word.text != "26.42"))
         self.assertEqual(missing_cell["results"], [])
+
+    def test_router_ablation_uses_aligned_features_and_datasets(self):
+        payload = self.extract(ROUTER_ABLATION, 14, router_words())
+        recall, config, source = self.result_at(payload, "Table 2", "✓ ✓ ✗", "FeB4RAG / Recall")
+        dataset = next(d for d in payload["datasets"] if d["dataset_id"] == recall["dataset_id"])
+        self.assertEqual((recall["metric_name"], recall["raw_value"], recall["raw_unit"], dataset["dataset_name"]),
+                         ("Recall", "89.07", None, "FeB4RAG"))
+        self.assertIn("query, centroid", config["note"])
+        self.assertIsNone(config["generator_model"])
+        self.assertEqual(source["page"], 14)
+        self.assertAlmostEqual(source["bbox"][0], 377 / 595)
+        self.assertEqual(self.extract(ROUTER_ABLATION, 14, router_words(bad_x=True))["results"], [])

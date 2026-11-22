@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 import re
 import sys
 
+from evaluation_scan import read_evaluation_scan_tables
 from pdf_pages import ExtractionError, Page, Word
 from rag_tables import Column, Header, Table
 from scan_ocr import ScanImage, contrast, deskew, recognize, scan_region
@@ -421,8 +422,7 @@ def component_inventory_tables(page: Page, label: str, caption: str,
 
 
 def component_view(page: Page, dpi: int = 480, *, inventory: bool = False) -> tuple[ScanImage, tuple[Word, ...]]:
-    image = deskew(scan_region(page.scan, COMPONENT_BOUNDS, dpi=dpi)) if dpi != 480 else deskew(
-        scan_region(page.scan, COMPONENT_BOUNDS))
+    image = deskew(scan_region(page.scan, COMPONENT_BOUNDS, dpi=dpi))
     if not inventory:
         return image, recognize(image, page.scan.engine)
     scale = dpi / 480
@@ -470,11 +470,11 @@ def latency_table(page: Page, label: str, caption: str, *,
 
 
 def read_scanned_score_tables(pages: list[Page], tables: list[Table]) -> list[Table]:
-    recovered = []
+    recovered = read_evaluation_scan_tables(pages, tables)
     replaced = set()
     definitions = next((page for page in pages if page.scan and CAPTION_II.search(page.prose)), None)
     if definitions is None:
-        return tables
+        return [*tables, *recovered]
     rubric_evidence = next((match for page in pages if page.scan
                             and (match := fragment(page, r"Five[- ]Level\s+Judgment\s+Criteria"))
                             and fragment(page, r"GPT-4\s+0[1l/]25-Preview")), None)

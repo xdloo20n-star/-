@@ -25,9 +25,14 @@ CLASSIFIER_ROW = re.compile(
     rf"(?P<all>{DECIMAL.pattern})\s+(?P<no>{DECIMAL.pattern})\s+(?P<one>{DECIMAL.pattern})\s+"
     rf"(?P<multi>{DECIMAL.pattern})(?:\s{{3,}}\S.*|\s*)$", re.I,
 )
+ROUTER_ABLATION = re.compile(r"^Table \d+[:.] Ablation study of router[’']s input features\.", re.I)
+ROUTER_FEATURES = ("query", "centroid", "source-id")
+ROUTER_DATASETS = ("MIRAGE", "FeB4RAG")
 
 
 def read_classifier_table(page: Page, label: str, start: int, lines: list[str]) -> list[Table]:
+    if ROUTER_ABLATION.match(lines[0]):
+        return read_router_ablation(page, label, start, " ".join(" ".join(lines[:2]).split()))
     for index in range(2, min(8, len(lines))):
         caption = " ".join(" ".join(lines[:index - 1]).split())
         if (groups := CLASSIFIER_GROUPS.search(lines[index - 1])) and CLASSIFIER_CAPTION.match(caption):
@@ -37,6 +42,45 @@ def read_classifier_table(page: Page, label: str, start: int, lines: list[str]) 
         if ROUTE_CAPTION.match(caption) and (header := ROUTE_HEADER.fullmatch(lines[index])):
             return read_routes(page, label, start + index, caption, header, lines[index + 1:index + 9])
     return []
+
+
+def read_router_ablation(page: Page, label: str, start: int, caption: str) -> list[Table]:
+    if not page.words or not page.size:
+        return []
+    rows = visual_rows(page.words)
+    anchors = [row[0] for row in rows if ROUTER_ABLATION.match(" ".join(word.text for word in row))]
+    if len(anchors) != 1:
+        return []
+    grid = [row for row in rows if 15 < row[0].y - anchors[0].y < 100]
+    leading = [("Recall",), ROUTER_FEATURES, ROUTER_DATASETS]
+    for index in range(len(grid) - 5):
+        if [tuple(word.text for word in row) for row in grid[index:index + 3]] == leading:
+            break
+    else:
+        return []
+    recall, features, datasets, *body = grid[index:index + 6]
+    if not datasets[0].x < recall[0].x < datasets[1].x:
+        return []
+    centers = [word.x for word in features + datasets]
+    bounds = list(pairwise(column_boundaries(centers)))
+    tables = []
+    for row, expected in zip(body, (("✓", "✓", "✗"), ("✓", "✗", "✓"), ("✓", "✓", "✓")), strict=True):
+        if len(row) != 5 or tuple(word.text for word in row[:3]) != expected:
+            return []
+        if any(not left < word.x < right for word, (left, right) in zip(row, bounds, strict=True)):
+            return []
+        values = row[3:]
+        if any(not DECIMAL.fullmatch(value.text) or not 0 <= float(value.text.replace("−", "-")) <= 100
+               for value in values):
+            return []
+        columns = [Column(Header("Recall", "Recall", word.x, None, None), word.text,
+                          source_label=f"{word.text} / Recall", direction="higher_is_better") for word in datasets]
+        used = ", ".join(feature for feature, mark in zip(ROUTER_FEATURES, expected, strict=True) if mark == "✓")
+        tables.append(Table(page, label, caption, start, columns, [(" ".join(expected), [word.text for word in values])],
+                            config_name="RAGRoute", config_note=f"Router input features: {used}",
+                            task_type="classification of data source relevance",
+                            value_bboxes=(tuple(normalized_box(word, page.size) for word in values),)))
+    return tables
 
 
 def read_classifier_tables(pages: list[Page], occupied: set[tuple[int, str]]) -> list[Table]:

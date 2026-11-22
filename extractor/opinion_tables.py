@@ -257,10 +257,34 @@ def reference_scope(reference: Table | None, depth: int, metrics: tuple[str, ...
 
 
 def p_bound_column(title: str, metric: str, comparison: str, marker: Word, depth: int,
-                   method: tuple[Page, str], sample_size: int | None = None) -> Column:
-    return Column(Header(title, "p-value bound", marker.x, depth, None), DATASET, source_label=f"{title} / *",
+                   method: tuple[Page, str], sample_size: int | None = None, *, annotation: str = "*") -> Column:
+    return Column(Header(title, "p-value bound", marker.x, depth, None), DATASET, source_label=f"{title} / {annotation}",
                   metric_variant=f"Wilcoxon signed-rank; {metric}; {comparison}",
                   metric_variant_evidence=method, sample_size=sample_size)
+
+
+def reference_prose_bounds(page: Page, label: str, cutoff: str, bound: str,
+                           changes: dict[str, str]) -> dict[str, tuple[Page, str]]:
+    scope = (rf"Coverage\.\s+{re.escape(label)} presents the core comparison\s+at {re.escape(cutoff)} "
+             r"with hybrid retrieval on the forums dataset\.")
+    if not native_evidence([page], re.compile(scope)):
+        return {}
+    business = re.compile(scope + r"\s+Opinion enrichment significantly improves all cov-?\s*erage metrics: "
+                          r"\+\d+\.\d+% entity match rate, \+\d+\.\d+%\s+sentiment-intensity σ, "
+                          r"(\+\d+\.\d+%) business impact σ,\s+and \+\d+\.\d+% emotional markers \(all p"
+                          + re.escape(bound) + r"\)\.")
+    fairness = re.compile(r"Fairness\. Contrary to expectations, opinion en-?\s*richment reduces overall demographic coverage:\s+"
+                          r"Revenue Band by (\d+\.\d+%) and tenure by (\d+\.\d+%) \(both\s+p"
+                          + re.escape(bound) + r"\)\.")
+    evidence = {}
+    if source := native_evidence([page], business):
+        if changes["Biz Impact σ"] == business.fullmatch(source[1])[1]:
+            evidence["Biz Impact σ"] = source
+    if source := native_evidence([page], fairness):
+        revenue, tenure = fairness.fullmatch(source[1]).groups()
+        if changes["Revenue Band (%)"] == f"-{revenue}" and changes["Tenure (%)"] == f"-{tenure}":
+            evidence["Tenure (%)"] = source
+    return evidence
 
 
 def read_reference_deltas(page: Page, label: str, anchor: Word, _reference: Table | None) -> list[Table]:
@@ -270,7 +294,7 @@ def read_reference_deltas(page: Page, label: str, anchor: Word, _reference: Tabl
     caption, header, rows = grid
     context = re.search(r"Diversity metrics at (k=(\d+)) \(hybrid retrieval, forums dataset\)\. "
                         r"Statistical significance via Wilcoxon signed-rank test \(n=(\d+)\): "
-                        r"bold = p<0\.\d+, \* = p" + P_VALUE + r"\.", caption)
+                        r"bold = p" + P_VALUE + r", \* = p" + P_VALUE + r"\.", caption)
     method = native_evidence([page], WILCOXON)
     if not (context and method and int(context[2]) > 0 and int(context[3]) > 0):
         return []
@@ -280,6 +304,9 @@ def read_reference_deltas(page: Page, label: str, anchor: Word, _reference: Tabl
                 "Evidence (%)")
     if tuple(words_text(row[:-3]) for row in rows) != ordering:
         return []
+    prose = reference_prose_bounds(page, label, context[1], context[4], {
+        printed: row[-1].text.removesuffix("*").replace("−", "-") for printed, row in zip(ordering, rows, strict=True)
+    })
     tables = []
     for printed, row in zip(ordering, rows, strict=True):
         raw, enriched, marked = row[-3:]
@@ -293,6 +320,11 @@ def read_reference_deltas(page: Page, label: str, anchor: Word, _reference: Tabl
         values, cells = [marked.text], [marked]
         if marked.text.endswith("*"):
             columns.append(p_bound_column("∆", metric, "Enriched vs Raw", marked, depth, method, sample_size))
+            values.append(context[5])
+            cells.append(marked)
+        elif printed in prose:
+            columns.append(p_bound_column("∆", metric, "Enriched vs Raw", marked, depth, prose[printed], sample_size,
+                                          annotation="p-value"))
             values.append(context[4])
             cells.append(marked)
         tables.append(Table(page, label, caption, len(tables), columns, [(printed, values)], config_name=ENRICHED_KB,

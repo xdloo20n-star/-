@@ -230,6 +230,11 @@ class OpinionMethodTest(unittest.TestCase):
 
 
 class OpinionReferenceDeltaTest(unittest.TestCase):
+    coverage = ("Coverage. Table 2 presents the core comparison\nat k=20 with hybrid retrieval on the forums dataset.\n"
+                "Opinion enrichment significantly improves all coverage metrics: +42.7% entity match rate, +26.8%\n"
+                "sentiment-intensity σ, +14.5% business impact σ,\nand +23.6% emotional markers (all p<0.05).")
+    fairness = ("Fairness. Contrary to expectations, opinion enrichment reduces overall demographic coverage:\n"
+                "Revenue Band by 13.0% and tenure by 6.9% (both\np<0.05).")
     model_list = "Mistral Large, Qwen 235B, and Claude Sonnet 4.5."
     appendix_link = ("Cross-model consistency. The Full O-RAG improvement over Raw KB is consistent across extraction "
                      "models: Mistral Large (+24.2% Sent-Int\nσ), Qwen 235B (+27.4%), and Claude Sonnet 4.5\n"
@@ -272,6 +277,35 @@ class OpinionReferenceDeltaTest(unittest.TestCase):
                                                                               depth_page(repeat=True)]))
         self.assertEqual(sum(bool(row.get("duplicate_of")) for row in payload["results"]), 14)
         self.assertEqual(len(payload["results"]), 28)
+
+    def test_reference_prose_links_business_impact_and_tenure_to_reported_bounds(self):
+        page = replace(self.main_page(), reading_text=f"{MAIN}\n{self.coverage}\n{self.fairness}")
+        payload = extract_publication(PDF({"Title": "Opinion-Enriched RAG"}, [page]))
+        for row, metric, box, evidence in (
+            ("Biz Impact σ", "Business Impact sigma", (491 / 595, 159 / 842, 495 / 595, 163 / 842), self.coverage),
+            ("Tenure (%)", "Tenure Coverage", (491 / 595, 195 / 842, 495 / 595, 199 / 842), self.fairness),
+        ):
+            with self.subTest(row=row):
+                result, config, dataset, source = result_at(payload, "Table 2", row, "∆ / p-value")
+                self.assertEqual((result["metric_name"], result["metric_variant"], result["raw_value"], result["reported_value"],
+                                  result["metric_k"], result["sample_size"], config["retrieval_method"], dataset["dataset_name"],
+                                  source["page"], source["bbox"]),
+                                 ("p-value bound", f"Wilcoxon signed-rank; {metric}; Enriched vs Raw", "<0.05", None,
+                                  20, 48, "hybrid", "E-commerce seller forums", 6, box))
+                self.assertTrue(any(e["entity_id"] == result["result_id"] and e["fragment"] == evidence
+                                    for e in payload["evidence"]))
+
+    def test_reference_prose_rejects_wrong_scope_comparator_or_printed_change(self):
+        for coverage, fairness in (
+            (self.coverage.replace("Table 2", "Table 7"), self.fairness),
+            (self.coverage.replace("p<0.05", "p=0.05"), self.fairness.replace("p<0.05", "p<0.01")),
+            (self.coverage.replace("+14.5%", "+14.6%"), self.fairness.replace("6.9%", "6.8%")),
+        ):
+            with self.subTest(coverage=coverage, fairness=fairness):
+                page = replace(self.main_page(), reading_text=f"{MAIN}\n{coverage}\n{fairness}")
+                payload = extract_publication(PDF({"Title": "Opinion-Enriched RAG"}, [page]))
+                self.assertFalse(any(row["metric_name"] == "p-value bound" and row["raw_value"] == "<0.05"
+                                     for row in payload["results"]))
 
     def model_page(self, *, different=False):
         caption = ("Table 5: Retrieval diversity improvements (∆ vs. Raw\n"

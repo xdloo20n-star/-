@@ -1,5 +1,6 @@
 "use strict";
 
+const APP_NAME = "CBEPKA";
 const API = "/api/v1";
 const POLL_INTERVAL = 1600;
 const DOCUMENT_STATUS_RETRIES = 3;
@@ -405,7 +406,7 @@ function documentMessages(data) {
   const publication = data?.publication;
   const pages = data?.source_document?.unreadable_pages ?? [];
   if (publication?.in_scope === false) {
-    messages.push(element("div", "callout callout-warning", element("strong", "", "Статья вне области Сверки"),
+    messages.push(element("div", "callout callout-warning", element("strong", "", `Статья вне области ${APP_NAME}`),
       element("p", "", valueOrUnknown(publication.exclusion_reason))));
   }
   if (pages.length) {
@@ -447,7 +448,7 @@ function showDocument(screen, params) {
       }
       if (doc.status !== lastStatus || showLoading) {
         heading.querySelector("h1").textContent = doc.original_filename;
-        document.title = `${doc.original_filename} · Сверка`;
+        document.title = `${doc.original_filename} · ${APP_NAME}`;
         const actions = element("div", "action-group", pdfLink(doc.file_url, "Открыть PDF"));
         if (doc.status === "completed") actions.append(documentExport(id));
         if (doc.status === "completed" && data?.publication?.in_scope === true) {
@@ -1010,7 +1011,7 @@ function showResult(screen, params) {
       const detail = await request(endpoint("results", id), { signal: screen.signal });
       if (screen.signal.aborted) return;
       heading.querySelector("h1").textContent = detail.result.metric_name;
-      document.title = `${detail.result.metric_name} · Сверка`;
+      document.title = `${detail.result.metric_name} · ${APP_NAME}`;
       const included = new Set(detail.evidence.map((item) => item.evidence_id));
       const needsDocument = detail.extraction_mode === "python"
         || detail.issues.some((issue) => issue.evidence_ids.some((evidenceId) => !included.has(evidenceId)));
@@ -1164,7 +1165,7 @@ function renderScreen(focus) {
   currentScreen = { name, controller, signal: controller.signal };
   if (name === "results") currentScreen.resultsBack = resultsRoute(resultFilters(params), pageNumber(params));
   if (name === "result") currentScreen.resultsBack = routeBack(params);
-  document.title = `${SCREENS[name].title} · Сверка`;
+  document.title = `${SCREENS[name].title} · ${APP_NAME}`;
   const documents = name === "documents" || name === "document";
   const groups = name === "groups";
   const results = !documents && !groups;

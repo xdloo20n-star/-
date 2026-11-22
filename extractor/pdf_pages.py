@@ -18,6 +18,7 @@ POSITIONED_TABLE = re.compile(
     r"Number of examples and percentages by|Retrieval performance comparison on the|"
     r"Ablation study on Bayesian components|Performance comparison with different generator models on MMLongBench-Doc|"
     r"Contextual faithfulness on CoFaithfulQA|Inference latency (?:with and without CoDA|under different prompt)|"
+    r"Diversity metrics at different retrieval depths \(k\) using hybrid retrieval|"
     r"Performance comparison on DocBench with different generators|"
     r"LLM QA accuracy in (?:answering XRAG ques|the XRAG (?:monolingual|multilingual))|"
     r"Controlled analysis of (?:GPT-4o|Claude Sonnet 3\.5|Mistral-large|Command-R\+) on|"

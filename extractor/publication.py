@@ -19,6 +19,7 @@ from failure_ablations import link_ablation_averages
 from grouped_scores import enrich_grouped_scores
 from knowledge_benchmarks import read_knowledge_benchmarks
 from native_benchmark_tables import read_native_benchmark_tables
+from opinion_tables import read_opinion_tables
 from paired_scores import enrich_repeated_score_rows, read_additional_score_tables
 from pdf_pages import PDF, Page
 from prostep_context import enrich_prostep_context
@@ -294,6 +295,7 @@ def extract_publication(pdf: PDF, *, source_path: Path | None = None) -> dict[st
     extracted_tables += read_training_scan_pairs(pdf.pages, extracted_tables)
     extracted_tables += read_context_recall_tables(pdf.pages, extracted_tables)
     extracted_tables += read_coda_tables(pdf.pages, extracted_tables)
+    extracted_tables = read_opinion_tables(pdf.pages, extracted_tables)
     extracted_tables = read_factuality_tables(pdf.pages, extracted_tables)
     extracted_tables = read_reasoning_tables(pdf.pages, extracted_tables)
     extracted_tables = read_scanned_score_tables(pdf.pages, extracted_tables)

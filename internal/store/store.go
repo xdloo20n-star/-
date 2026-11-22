@@ -21,7 +21,8 @@ import (
 var initialSchema string
 
 type Store struct {
-	db *sql.DB
+	db       *sql.DB
+	exportDB *sql.DB
 }
 
 func Open(ctx context.Context, path string) (*Store, error) {
@@ -46,10 +47,20 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate SQLite: %w", err)
 	}
-	return &Store{db: db}, nil
+	// Keep a slow export reader off the writer connection. WAL allows the
+	// export snapshot and subsequent queue writes to proceed concurrently.
+	readDSN := dsn
+	readDSN.RawQuery = url.Values{"mode": {"ro"}, "_pragma": {"busy_timeout(5000)"}}.Encode()
+	exportDB, err := sql.Open("sqlite", readDSN.String())
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("open export connection: %w", err)
+	}
+	exportDB.SetMaxOpenConns(1)
+	return &Store{db: db, exportDB: exportDB}, nil
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error { return errors.Join(s.exportDB.Close(), s.db.Close()) }
 
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 
@@ -68,16 +79,20 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		if _, err := tx.ExecContext(ctx, initialSchema); err != nil {
 			return err
 		}
-	case 1:
-		if err := refreshStoredBaselines(ctx, tx); err != nil {
+	case 1, 2:
+		if err := refreshStoredResultChecks(ctx, tx, version == 1); err != nil {
 			return err
 		}
-	case 2:
+	case 3:
 		return tx.Commit()
 	default:
 		return fmt.Errorf("unsupported database version %d", version)
 	}
-	if _, err := tx.ExecContext(ctx, "PRAGMA user_version = 2"); err != nil {
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS documents_corpus_uploaded
+		ON documents (corpus_id, uploaded_at DESC, document_id DESC)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "PRAGMA user_version = 3"); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -100,15 +115,47 @@ func (s *Store) Recover(ctx context.Context) error {
 	return err
 }
 
+func (s *Store) QueuedExtractionModes(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT DISTINCT extraction_mode FROM documents WHERE status = 'queued'
+		ORDER BY extraction_mode`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var modes []string
+	for rows.Next() {
+		var mode string
+		if err := rows.Scan(&mode); err != nil {
+			return nil, err
+		}
+		modes = append(modes, mode)
+	}
+	return modes, rows.Err()
+}
+
+// Claim rolls back if cancellation prevents reading the claimed row. An
+// autocommitted UPDATE RETURNING could otherwise leave an unowned job.
 func (s *Store) Claim(ctx context.Context) (model.Document, error) {
-	query := `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Document{}, err
+	}
+	defer tx.Rollback()
+	doc, err := scanDocument(tx.QueryRowContext(ctx, `
 		UPDATE documents SET status = 'processing'
 		WHERE document_id = (
 			SELECT document_id FROM documents WHERE status = 'queued'
 			ORDER BY uploaded_at, document_id LIMIT 1
 		) AND status = 'queued'
-		RETURNING ` + documentColumns
-	return scanDocument(s.db.QueryRowContext(ctx, query))
+		RETURNING `+documentColumns))
+	if err != nil {
+		return model.Document{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Document{}, err
+	}
+	return doc, nil
 }
 
 func (s *Store) Fail(ctx context.Context, docID string, failure model.Problem) error {
@@ -254,27 +301,57 @@ func decodeJSON(raw []byte, dst any) error {
 	return reader.Decode(dst)
 }
 
-func (s *Store) Export(ctx context.Context, id string) ([]model.DocumentDetail, error) {
+// ReadExport visits each document and its stored JSON snapshot in export order.
+// The callback runs while the read-only connection holds the SQLite snapshot.
+func (s *Store) ReadExport(ctx context.Context, id string, visit func(model.Document, []byte) error) error {
+	query := "SELECT " + documentColumns + ", data_json FROM documents"
+	var args []any
 	if id != "" {
-		document, err := s.DocumentDetail(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		return []model.DocumentDetail{document}, nil
+		query += " WHERE document_id = ?"
+		args = append(args, id)
+	} else {
+		query += " ORDER BY uploaded_at DESC, document_id DESC"
 	}
-	query := "SELECT " + documentColumns + ", data_json FROM documents ORDER BY uploaded_at DESC, document_id DESC"
-	rows, err := s.db.QueryContext(ctx, query)
+	rows, err := s.exportDB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		found = true
+		var snapshot []byte
+		doc, err := scanDocument(rows, &snapshot)
+		if err != nil {
+			return err
+		}
+		if err := visit(doc, snapshot); err != nil {
+			return err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if id != "" && !found {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Store) Export(ctx context.Context, id string) ([]model.DocumentDetail, error) {
+	documents := []model.DocumentDetail{}
+	err := s.ReadExport(ctx, id, func(doc model.Document, snapshot []byte) error {
+		detail := model.DocumentDetail{Document: doc}
+		if snapshot != nil {
+			if err := decodeJSON(snapshot, &detail.Data); err != nil {
+				return err
+			}
+		}
+		documents = append(documents, detail)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	documents := []model.DocumentDetail{}
-	for rows.Next() {
-		doc, err := scanDocumentDetail(rows)
-		if err != nil {
-			return nil, err
-		}
-		documents = append(documents, doc)
-	}
-	return documents, rows.Err()
+	return documents, nil
 }

@@ -6,6 +6,10 @@ import unittest
 from unittest.mock import patch
 
 from batch import evaluate as benchmark
+from batch.result_validation import DUPLICATE_FIELDS
+
+
+RESULT_COLUMNS = tuple(dict.fromkeys((*benchmark.RESULT_FIELDS, *DUPLICATE_FIELDS)))
 
 
 def publication(publication_id, in_scope="true", reason=""):
@@ -13,7 +17,7 @@ def publication(publication_id, in_scope="true", reason=""):
 
 
 def result(result_id, publication_id="D001", **overrides):
-    return dict.fromkeys(benchmark.RESULT_FIELDS, "") | {
+    return dict.fromkeys(RESULT_COLUMNS, "") | {
         "publication_id": publication_id,
         "result_id": result_id,
         "config_id": "config",
@@ -21,6 +25,7 @@ def result(result_id, publication_id="D001", **overrides):
         "extraction_status": "extracted",
         "raw_value": "0.5",
         "metric_name": "Recall",
+        "metric_value": "0.5",
         "source_page": "4",
         "source_table": "Table 2",
     } | overrides
@@ -29,7 +34,7 @@ def result(result_id, publication_id="D001", **overrides):
 def fixtures(publications, results, *, configurations=None, datasets=None):
     tables = {
         "publications": (("publication_id", "in_scope", "exclusion_reason"), publications),
-        "results": (("publication_id", *benchmark.RESULT_FIELDS), results),
+        "results": (("publication_id", *RESULT_COLUMNS), results),
     }
     if configurations is not None:
         tables["configurations"] = (("publication_id", "config_id", *benchmark.CONFIG_FIELDS), configurations)
@@ -186,10 +191,46 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(scope["context_agreement"]["micro"], benchmark.agreement(1, 2, 2))
 
     def test_invalid_duplicate_reference_cannot_remove_candidate_from_score(self):
-        with self.assertRaisesRegex(ValueError, "duplicate_of must point to a canonical extracted row"):
+        with self.assertRaisesRegex(ValueError, "D001/r1: duplicate_of target 'r2' does not exist"):
             fixtures([publication("D001"), publication("D002")], [
                 result("r1", duplicate_of="r2"), result("r2", "D002"),
             ])
+
+    def test_invalid_duplicate_conditions_and_values_are_rejected(self):
+        for field in DUPLICATE_FIELDS:
+            with self.subTest(field=field):
+                mismatch = "0.56" if field == "metric_value" else "different"
+                with self.assertRaisesRegex(ValueError, f"D001/r2: duplicate_of differs in {field}"):
+                    fixtures([publication("D001")], [
+                        result("r1"), result("r2", duplicate_of="r1", **{field: mismatch}),
+                    ])
+        for rows in (
+            [result("r1", extraction_status="absent"), result("r2", duplicate_of="r1")],
+            [result("r1"), result("r2", duplicate_of="r1", extraction_status="present_not_extractable")],
+        ):
+            with self.assertRaisesRegex(ValueError, "D001/r2: duplicate_of requires two extracted rows"):
+                fixtures([publication("D001")], rows)
+
+    def test_duplicate_cycle_is_rejected(self):
+        for rows in (
+            [result("r1", duplicate_of="r1")],
+            [result("r1", duplicate_of="r2"), result("r2", duplicate_of="r1")],
+        ):
+            with self.assertRaisesRegex(ValueError, "D001/r1: duplicate_of cycle"):
+                fixtures([publication("D001")], rows)
+
+    def test_duplicate_chain_compares_each_link_at_reported_precision(self):
+        publications = [publication("D001")]
+        gold = fixtures(publications, [result("r1")])
+        candidate = fixtures(publications, [
+            result("leaf", duplicate_of=" middle ", metric_value="0.449", raw_value=".449"),
+            result("middle", duplicate_of="root", metric_value="0.45", raw_value=".45"),
+            result("root"),
+        ])
+        scope = benchmark.evaluate(gold, candidate)["corpus"]["scopes"]["all_results"]
+        self.assertEqual(2, scope["candidate"]["marked_duplicate"])
+        self.assertEqual(1, scope["candidate"]["eligible"])
+        self.assertEqual(benchmark.agreement(1, 1, 1), scope["source_agreement"]["micro"])
 
     def test_diagnostics_keep_exact_matches_and_count_each_projection_one_to_one(self):
         publications = [publication("D001"), publication("D002")]
@@ -215,6 +256,31 @@ class BenchmarkTests(unittest.TestCase):
         self.assertEqual(1, scopes["D001"]["additional_matches_by_field"]["aggregation"])
         self.assertEqual(1, scopes["D002"]["additional_matches_by_field"]["source_table"])
         self.assertIsNone(scopes["P001"]["additional_matches_by_field"])
+
+    def test_diagnostics_can_project_away_one_missing_required_field(self):
+        publications = [publication("D001")]
+        gold = fixtures(publications, [
+            result("match", raw_value="0.4"),
+            result("table"), result("metric", raw_value="0.6"),
+            result("page", raw_value="0.7"), result("two_missing", raw_value="0.8"),
+        ])
+        candidate = fixtures(publications, [
+            result("match", raw_value="0.4"), result("match_extra", raw_value="0.4", source_table=""),
+            result("missing_table", source_table=""), result("missing_table_extra", source_table=""),
+            result("missing_metric", raw_value="0.6", metric_name=""),
+            result("missing_page", raw_value="0.7", source_page=""),
+            result("two_missing", raw_value="0.8", source_page="", source_table=""),
+        ])
+        report = benchmark.evaluate(gold, candidate, diagnostics=True)
+        self.assertTrue(report["scoring"].pop("additional_matches_by_field"))
+        for scopes in (report["corpus"]["scopes"], report["documents"]["D001"]["scopes"]):
+            for scope_name, scope in scopes.items():
+                gains = scope.pop("additional_matches_by_field")
+                expected = dict.fromkeys(benchmark.DIAGNOSTIC_FIELDS, 0) | {
+                    "metric_name": 1, "source_page": 1, "source_table": int(scope_name == "all_results"),
+                }
+                self.assertEqual(expected, gains)
+        self.assertEqual(benchmark.evaluate(gold, candidate), report)
 
     def test_cli_json_stdout(self):
         gold = fixtures([publication("D001")], [result("r1")])

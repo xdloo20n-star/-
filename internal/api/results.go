@@ -78,7 +78,10 @@ func resultFilter(query url.Values) (store.ResultFilter, error) {
 }
 
 func (s *Server) listResults(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query()
+	query, ok := requestQuery(w, r)
+	if !ok {
+		return
+	}
 	page, err := pagination(query)
 	if err != nil {
 		badQuery(w, err)
@@ -134,20 +137,73 @@ func (s *Server) comparison(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) export(w http.ResponseWriter, r *http.Request) {
-	id, err := queryID(r.URL.Query(), "document_id")
+	query, ok := requestQuery(w, r)
+	if !ok {
+		return
+	}
+	id, err := queryID(query, "document_id")
 	if err != nil {
 		badQuery(w, err)
 		return
 	}
-	docs, err := s.store.Export(r.Context(), id)
-	if err != nil {
-		s.storeError(w, r, err)
-		return
+	started := false
+	begin := func() error {
+		started = true
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		_, err := io.WriteString(w, `{"schema_version":`+strconv.Quote(model.SchemaVersion)+`,"documents":[`)
+		return err
 	}
-	writeJSON(w, http.StatusOK, struct {
-		SchemaVersion string                 `json:"schema_version"`
-		Documents     []model.DocumentDetail `json:"documents"`
-	}{SchemaVersion: model.SchemaVersion, Documents: docs})
+	err = s.store.ReadExport(r.Context(), id, func(doc model.Document, snapshot []byte) error {
+		if snapshot == nil {
+			snapshot = []byte("null")
+		} else if !json.Valid(snapshot) {
+			return fmt.Errorf("invalid stored snapshot for %s", doc.ID)
+		}
+		metadata, err := json.Marshal(doc)
+		if err != nil {
+			return err
+		}
+		if !started {
+			if err := begin(); err != nil {
+				return err
+			}
+		} else if _, err := io.WriteString(w, ","); err != nil {
+			return err
+		}
+		return writeExportDocument(w, metadata, snapshot)
+	})
+	if err != nil {
+		if !started {
+			s.storeError(w, r, err)
+			return
+		}
+		s.log.Error("stream export", "error", err)
+		panic(http.ErrAbortHandler)
+	}
+	if !started {
+		if err := begin(); err != nil {
+			return
+		}
+	}
+	_, _ = io.WriteString(w, "]}\n")
+}
+
+func writeExportDocument(w io.Writer, metadata, snapshot []byte) error {
+	for _, chunk := range [][]byte{[]byte(`{"document":`), metadata, []byte(`,"data":`), snapshot, []byte("}")} {
+		if _, err := w.Write(chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requestQuery(w http.ResponseWriter, r *http.Request) (url.Values, bool) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		badQuery(w, fmt.Errorf("некорректные параметры запроса: %w", err))
+		return nil, false
+	}
+	return query, true
 }
 
 func badQuery(w http.ResponseWriter, err error) {

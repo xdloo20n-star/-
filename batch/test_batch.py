@@ -1,15 +1,18 @@
 import contextlib
 import csv
+import hashlib
 import io
 import json
 import tempfile
 import threading
+import time
 import unittest
 import zipfile
 from email import policy
 from email.parser import BytesParser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 from batch.__main__ import main
@@ -83,6 +86,9 @@ class BatchTest(unittest.TestCase):
                 response = route(self.command, urlsplit(self.path), self.headers, self.rfile.read(size))
                 if response is None:
                     self.close_connection = True
+                    return
+                if callable(response):
+                    response(self)
                     return
                 status, body = response
                 payload = json.dumps(body).encode()
@@ -239,9 +245,9 @@ class BatchTest(unittest.TestCase):
             if method == "POST":
                 return 202, dict(finished["document"], status="queued")
             if url.path == "/api/v1/documents":
-                page = parse_qs(url.query)["page"]
-                items = [finished["document"]] if page == ["2"] else [{"corpus_id": None}] * 100
-                return 200, {"items": items, "total": 101}
+                return 200, {"corpus_id": "D001", "items": [finished["document"]], "total": 1}
+            if url.path.endswith("/digest"):
+                return 200, {"sha256": hashlib.sha256(pdf).hexdigest()}
             if len(requests) == 2:
                 return 200, detail(status="processing")
             return 200, finished
@@ -253,7 +259,7 @@ class BatchTest(unittest.TestCase):
         self.assertIn("processing [python]", err)
         self.assertIn("completed [python]", err)
         method, url, headers, body = requests[0]
-        self.assertEqual(("POST", "/api/v1/documents"), (method, url.path))
+        self.assertEqual(("POST", "/api/v1/documents", ""), (method, url.path, url.query))
         multipart = BytesParser(policy=policy.default).parsebytes(
             f"Content-Type: {headers['Content-Type']}\r\n\r\n".encode() + body)
         [part] = list(multipart.iter_parts())
@@ -265,7 +271,13 @@ class BatchTest(unittest.TestCase):
         self.output = self.root / "resumed"
         code, _, err = self.cli("run", self.root, "--resume", "--api-url", api + "/api/v1")
         self.assertEqual(0, code, err)
-        self.assertEqual(["GET"] * 3, [method for method, *_ in requests])
+        self.assertEqual(
+            [("GET", "/api/v1/documents"), ("GET", "/api/v1/documents/doc_D001/digest"),
+             ("GET", "/api/v1/documents/doc_D001")],
+            [(method, url.path) for method, url, *_ in requests],
+        )
+        self.assertEqual({"corpus_id": ["D001"], "page": ["1"], "page_size": ["100"]},
+                         parse_qs(requests[0][1].query))
         self.assertEqual("D001", self.csv("publications")[0]["publication_id"])
 
     def test_ambiguous_resume_and_pinned_job(self):
@@ -273,7 +285,9 @@ class BatchTest(unittest.TestCase):
 
         def route(method, url, headers, body):
             if method == "GET" and url.path == "/api/v1/documents":
-                return 200, {"total": 2, "items": [selected["document"], detail()["document"]]}
+                corpus_id = parse_qs(url.query)["corpus_id"][0]
+                items = [selected["document"], detail()["document"]] if corpus_id == "D001" else []
+                return 200, {"corpus_id": corpus_id, "total": len(items), "items": items}
             if method == "GET" and url.path == "/api/v1/documents/doc_chosen":
                 return 200, selected
             return 404, {"error": {"code": "not_found", "message": "Missing job"}}
@@ -291,6 +305,126 @@ class BatchTest(unittest.TestCase):
         self.assertIn("not_found: Missing job", err)
         code, _, err = self.cli("resume", "D001", "--document-id", "D001=doc_chosen", "--api-url", api)
         self.assertEqual(0, code, err)
+
+    def test_filtered_pagination_reports_ambiguity_and_rejects_page_changes(self):
+        items = [detail(document_id=f"doc_{number:03}")["document"] for number in range(101)]
+        requests = []
+        (self.root / "D001.pdf").write_bytes(b"%PDF-1.7\nlocal")
+        (self.root / "D002.pdf").write_bytes(b"%PDF-1.7\ngap")
+
+        for change, message in ((None, "doc_100"), ("total", "incomplete pagination"),
+                                ("filter", "did not confirm the exact corpus filter"),
+                                ("repeat", "repeated doc_000")):
+            with self.subTest(change=change):
+                def route(method, url, *_):
+                    query = parse_qs(url.query)
+                    requests.append((method, url.path, query))
+                    page = query.get("page")
+                    if page == ["1"] and query.get("corpus_id") == ["D001"]:
+                        return 200, {"corpus_id": "D001", "items": items[:100], "total": 101}
+                    if page == ["2"]:
+                        return 200, {"corpus_id": "D002" if change == "filter" else "D001",
+                                     "items": items[:1] if change == "repeat" else items[100:],
+                                     "total": 102 if change == "total" else 101}
+                    return 200, {"corpus_id": "D002", "items": [], "total": 0}
+
+                requests.clear()
+                code, _, err = self.cli("run", self.root, "--resume", "--api-url", self.api(route))
+                self.assertEqual(1, code)
+                self.assertIn(message, err)
+                self.assertEqual([["1"], ["2"]], [query["page"] for _, _, query in requests[:2]])
+                self.assertTrue(all(method == "GET" and path == "/api/v1/documents" for method, path, _ in requests))
+                self.assertFalse(self.output.exists())
+
+    def test_old_server_cannot_turn_resume_into_an_unguarded_upload(self):
+        (self.root / "D001.pdf").write_bytes(b"%PDF-1.7\nlocal")
+        requests = []
+
+        def route(method, url, *_):
+            requests.append((method, url.path))
+            return 200, {"items": [], "total": 0}
+
+        code, _, err = self.cli("run", self.root, "--resume", "--api-url", self.api(route))
+        self.assertEqual(1, code)
+        self.assertIn("Upgrade the Go API", err)
+        self.assertEqual([("GET", "/api/v1/documents")], requests)
+        self.assertFalse(self.output.exists())
+
+    def test_resume_verifies_discovered_and_pinned_jobs_before_uploading_gaps(self):
+        (self.root / "D001.pdf").write_bytes(b"%PDF-1.7\nlocal")
+        (self.root / "D002.pdf").write_bytes(b"%PDF-1.7\ngap")
+        selected = detail(document_id="doc_chosen")
+        for pins in ((), ("--document-id", "D001=doc_chosen")):
+            for digest, message in (("0" * 64, "SHA-256 mismatch"), ("A" * 64, "invalid SHA-256 digest")):
+                with self.subTest(pins=pins, digest=digest):
+                    requests = []
+
+                    def route(method, url, *_):
+                        requests.append((method, url.path, parse_qs(url.query)))
+                        if url.path == "/api/v1/documents":
+                            corpus_id = parse_qs(url.query)["corpus_id"][0]
+                            items = [selected["document"]] if corpus_id == "D001" else []
+                            return 200, {"corpus_id": corpus_id, "total": len(items), "items": items}
+                        if url.path.endswith("/digest"):
+                            return 200, {"sha256": digest}
+                        return 200, selected
+
+                    code, _, err = self.cli("run", self.root, "--resume", *pins, "--api-url", self.api(route))
+                    self.assertEqual(1, code)
+                    self.assertIn("D001 (doc_chosen):", err)
+                    self.assertIn(message, err)
+                    self.assertTrue(all(method == "GET" for method, _, _ in requests))
+                    self.assertEqual([["D002"]] if pins else [["D001"], ["D002"]],
+                                     [query["corpus_id"] for _, path, query in requests if path == "/api/v1/documents"])
+                    self.assertFalse(self.output.exists())
+
+    def test_run_checks_matching_pdf_for_an_explicit_pin(self):
+        pdf = b"%PDF-1.7\nlocal"
+        (self.root / "D001.pdf").write_bytes(pdf)
+        selected = detail(document_id="doc_chosen")
+        requests = []
+
+        def route(method, url, *_):
+            requests.append((method, url.path))
+            if url.path.endswith("/digest"):
+                return 200, {"sha256": hashlib.sha256(pdf).hexdigest()}
+            return 200, selected
+
+        code, _, err = self.cli("run", self.root, "--document-id", "D001=doc_chosen", "--api-url", self.api(route))
+        self.assertEqual(0, code, err)
+        self.assertEqual([("GET", "/api/v1/documents/doc_chosen/digest"),
+                          ("GET", "/api/v1/documents/doc_chosen")], requests)
+
+    def test_resume_uses_atomic_post_when_a_job_appears_after_discovery(self):
+        (self.root / "D001.pdf").write_bytes(b"%PDF-1.7\nlocal")
+        existing = detail(document_id="doc_concurrent")
+        for status in (202, 409, 504):
+            with self.subTest(status=status):
+                self.output = self.root / f"gap-{status}"
+                requests = []
+
+                def route(method, url, *_):
+                    requests.append((method, url.path, parse_qs(url.query)))
+                    if method == "POST":
+                        if status == 202:
+                            return status, existing["document"]
+                        return status, {"error": {"code": "reuse_conflict" if status == 409 else "gateway_timeout"}}
+                    if url.path == "/api/v1/documents":
+                        # A competing client fills the gap after this snapshot.
+                        return 200, {"corpus_id": "D001", "total": 0, "items": []}
+                    return 200, existing
+
+                code, _, err = self.cli("run", self.root, "--resume", "--api-url", self.api(route))
+                self.assertEqual(0 if status == 202 else 1, code, err)
+                self.assertEqual([("GET", "/api/v1/documents"), ("POST", "/api/v1/documents")]
+                                 + ([("GET", "/api/v1/documents/doc_concurrent")] if status == 202 else []),
+                                 [(method, path) for method, path, _ in requests])
+                self.assertEqual({"reuse": ["true"]}, requests[1][2])
+                if status == 202:
+                    self.assertEqual("D001", self.csv("publications")[0]["publication_id"])
+                else:
+                    self.assertIn(f"HTTP {status}", err)
+                    self.assertFalse(self.output.exists())
 
     def test_temporary_status_errors_recover_without_reuploading(self):
         (self.root / "D001.pdf").write_bytes(b"%PDF-1.7\nsynthetic bytes")
@@ -322,7 +456,7 @@ class BatchTest(unittest.TestCase):
             if len(requests) == 1:
                 return 503, {}
             if url.path == "/api/v1/documents":
-                return 200, {"items": [finished["document"]], "total": 1}
+                return 200, {"corpus_id": "D001", "items": [finished["document"]], "total": 1}
             return 200, finished
 
         code, _, err = self.cli("resume", "D001", "--api-url", self.api(route))
@@ -367,6 +501,69 @@ class BatchTest(unittest.TestCase):
         self.assertEqual(1, code)
         self.assertIn("Timed out waiting for jobs after 0.1s", err)
         self.assertIn("D001 (doc_D001): last status=processing", err)
+        self.assertFalse(self.output.exists())
+
+    def test_slow_drip_cannot_extend_the_polling_deadline(self):
+        payload = json.dumps(detail()).encode()
+        header = f"HTTP/1.0 200 OK\r\nContent-Length: {len(payload)}\r\n".encode()
+
+        for phase in ("headers", "body"):
+            with self.subTest(phase=phase):
+                requests = []
+
+                def drip(handler):
+                    try:
+                        if phase == "headers":
+                            handler.wfile.write(header + b"X-Slow: ")
+                            for _ in range(40):
+                                time.sleep(0.025)
+                                handler.wfile.write(b"x")
+                            handler.wfile.write(b"\r\n\r\n" + payload)
+                        else:
+                            handler.wfile.write(header + b"\r\n")
+                            for offset in range(0, len(payload), 8):
+                                time.sleep(0.025)
+                                handler.wfile.write(payload[offset:offset + 8])
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+
+                def route(method, url, *_):
+                    requests.append((method, url.path))
+                    return drip
+
+                api = self.api(route)
+                started = time.monotonic()
+                code, _, err = self.cli("resume", "D001", "--document-id", "D001=doc_D001",
+                                        "--api-url", api, "--timeout", 0.2)
+                self.assertLess(time.monotonic() - started, 0.75)
+                self.assertEqual(1, code)
+                self.assertIn("Timed out waiting for jobs after 0.2s", err)
+                self.assertEqual([("GET", "/api/v1/documents/doc_D001")], requests)
+                self.assertFalse(self.output.exists())
+
+    def test_resume_does_not_accept_completion_at_the_selection_and_wait_deadline(self):
+        finished = detail()
+        now = 100.0
+
+        def documents(corpus_id, *, deadline):
+            nonlocal now
+            self.assertEqual(("D001", 101.0), (corpus_id, deadline))
+            now = 100.75
+            return [finished["document"]]
+
+        def late_detail(document_id, *, deadline):
+            nonlocal now
+            self.assertEqual(("doc_D001", 101.0), (document_id, deadline))
+            now = deadline
+            return finished
+
+        with patch("batch.__main__.SverkaAPI") as api, patch("batch.__main__.time") as clock:
+            clock.monotonic.side_effect = lambda: now
+            api.return_value.documents.side_effect = documents
+            api.return_value.detail.side_effect = late_detail
+            code, _, err = self.cli("resume", "D001", "--timeout", 1)
+        self.assertEqual(1, code)
+        self.assertIn("Timed out waiting for jobs after 1s", err)
         self.assertFalse(self.output.exists())
 
 

@@ -6,13 +6,13 @@ import (
 	"strings"
 )
 
-var integerCutoffSuffix = regexp.MustCompile(`@\d+$`)
+var integerCutoffSuffix = regexp.MustCompile(`\s*@\s*([0-9]+)\s*$`)
 
 // Normalized derives a value only from explicit units or scale information.
 func Normalized(result Record) *MeasuredValue {
 	value, ok := result.Number("reported_value")
 	unit, factor := normalizationUnit(result)
-	if !ok || unit == "" {
+	if !ok || unit == "" || RawValueConflict(result) {
 		return nil
 	}
 	if factor < 1 {
@@ -141,6 +141,10 @@ func Compare(left, right ResultDetail) Comparison {
 func compareConditions(left, right ResultDetail) ([]Criterion, string) {
 	leftUnit, _ := normalizationUnit(left.Result)
 	rightUnit, _ := normalizationUnit(right.Result)
+	scale := compareText("scale", "Шкала после нормализации", leftUnit, rightUnit)
+	if scale.Status != "mismatch" && (RawValueConflict(left.Result) || RawValueConflict(right.Result)) {
+		scale = Criterion{"scale", "missing", "Числовой разбор отличается от записи в PDF для одной или обеих метрик."}
+	}
 	criteria := []Criterion{
 		compareText("task", "Тип задачи", left.Task.Text("task_type"), right.Task.Text("task_type")),
 		compareText("dataset", "Датасет", left.Dataset.Text("dataset_name"), right.Dataset.Text("dataset_name")),
@@ -148,7 +152,7 @@ func compareConditions(left, right ResultDetail) ([]Criterion, string) {
 		compareText("data_split", "Сплит", left.Dataset.Text("data_split"), right.Dataset.Text("data_split")),
 		compareDefinition(left.Result, right.Result),
 		compareCutoff(left.Result, right.Result),
-		compareText("scale", "Шкала после нормализации", leftUnit, rightUnit),
+		scale,
 		compareText("aggregation", "Агрегация", left.Result.Text("aggregation"), right.Result.Text("aggregation")),
 		compareText("evaluation_protocol", "Протокол оценки", left.Experiment.Text("evaluation_protocol"), right.Experiment.Text("evaluation_protocol")),
 	}
@@ -184,6 +188,9 @@ func compareDefinition(left, right Record) Criterion {
 }
 
 func compareCutoff(left, right Record) Criterion {
+	if CutoffConflict(left) || CutoffConflict(right) {
+		return Criterion{"metric_k", "mismatch", "Значение k в названии метрики противоречит отдельному полю."}
+	}
 	leftApplicability := left.Text("metric_k_applicability")
 	rightApplicability := right.Text("metric_k_applicability")
 	leftK, leftKnown := left.Number("metric_k")

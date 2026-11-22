@@ -2,6 +2,9 @@
 
 package extract
 
-import "os/exec"
+import (
+	"context"
+	"os/exec"
+)
 
-func configureExtractorProcess(_ *exec.Cmd) {}
+func runExtractorProcess(_ context.Context, cmd *exec.Cmd) error { return cmd.Run() }

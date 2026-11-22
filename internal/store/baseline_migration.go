@@ -5,30 +5,27 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"sverka/internal/model"
 )
 
 // Refresh the document snapshots and result index in the same migration transaction.
-func refreshStoredBaselines(ctx context.Context, tx *sql.Tx) error {
-	ids, err := documentsWithBaselines(ctx, tx)
+func refreshStoredResultChecks(ctx context.Context, tx *sql.Tx, legacyBaselines bool) error {
+	ids, err := completedDocumentIDs(ctx, tx)
 	if err != nil {
 		return err
 	}
 	for _, id := range ids {
-		if err := refreshDocumentBaselines(ctx, tx, id); err != nil {
-			return fmt.Errorf("refresh baselines for %s: %w", id, err)
+		if err := refreshDocumentResultChecks(ctx, tx, id, legacyBaselines); err != nil {
+			return fmt.Errorf("refresh result checks for %s: %w", id, err)
 		}
 	}
 	return nil
 }
 
-func documentsWithBaselines(ctx context.Context, tx *sql.Tx) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT document_id FROM documents WHERE status = 'completed' AND EXISTS (
-			SELECT 1 FROM json_each(documents.data_json, '$.results') AS result
-			WHERE json_type(result.value, '$.result.baseline_result_id') = 'text'
-		)`)
+func completedDocumentIDs(ctx context.Context, tx *sql.Tx) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT document_id FROM documents WHERE status = 'completed'")
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +41,7 @@ func documentsWithBaselines(ctx context.Context, tx *sql.Tx) ([]string, error) {
 	return ids, rows.Err()
 }
 
-func refreshDocumentBaselines(ctx context.Context, tx *sql.Tx, id string) error {
+func refreshDocumentResultChecks(ctx context.Context, tx *sql.Tx, id string, legacyBaselines bool) error {
 	var snapshot []byte
 	if err := tx.QueryRowContext(ctx, "SELECT data_json FROM documents WHERE document_id = ?", id).Scan(&snapshot); err != nil {
 		return err
@@ -52,6 +49,12 @@ func refreshDocumentBaselines(ctx context.Context, tx *sql.Tx, id string) error 
 	var data model.DocumentData
 	if err := decodeJSON(snapshot, &data); err != nil {
 		return err
+	}
+	changed := data.RefreshResultIntegrity()
+	if !changed && !(legacyBaselines && slices.ContainsFunc(data.Results, func(row model.ResultSummary) bool {
+		return row.Result.Text("baseline_result_id") != ""
+	})) {
+		return nil
 	}
 	data.RefreshBaselines()
 	updated, err := json.Marshal(&data)

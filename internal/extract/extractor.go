@@ -38,11 +38,10 @@ func (p PythonExtractor) Extract(ctx context.Context, pdfPath string) ([]byte, e
 	stdout := boundedOutput{limit: maxOutput}
 	stderr := boundedOutput{limit: 4 << 10}
 	cmd := exec.CommandContext(ctx, p.Executable, p.Script, "--pdf", pdfPath)
-	configureExtractorProcess(cmd)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	cmd.WaitDelay = 2 * time.Second
-	err := cmd.Run()
+	err := runExtractorProcess(ctx, cmd)
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}

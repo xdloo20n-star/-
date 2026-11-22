@@ -136,6 +136,7 @@ func (i *Importer) Prepare(raw []byte, doc model.Document) (*model.DocumentData,
 		Datasets: datasets, Tasks: tasks, Experiments: experiments, Results: summaries,
 		Evidence: evidence, Issues: issues,
 	}
+	data.RefreshResultIntegrity()
 	data.RefreshBaselines()
 	return data, nil
 }
@@ -295,7 +296,7 @@ func makeIssues(doc model.Document, publication, sourceDocument model.Record, ro
 		if result.Text("result_origin") == "cited" && result.Text("cited_publication_id") == "" {
 			add("citation_missing", "Обозначение цитируемой публикации не установлено.")
 		}
-		if result["reported_value"] != nil && row.Normalized == nil {
+		if result["reported_value"] != nil && row.Normalized == nil && !model.RawValueConflict(result) {
 			add("normalization", "Нормализация недоступна для указанного значения, единицы или шкалы.")
 		}
 	}

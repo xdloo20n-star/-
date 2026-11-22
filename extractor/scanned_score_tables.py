@@ -1,6 +1,7 @@
 """Read scanned model-score grids with distinct cells for mean and deviation."""
 
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, replace
 import re
 import sys
 
@@ -22,6 +23,7 @@ CAPTION_II = re.compile(
     re.I,
 )
 CAPTION_III = re.compile(r"\b(TABLE III): Performance comparison of models on \d+ CVE", re.I)
+CAPTION_IV = re.compile(r"\b(TABLE IV): Fraction of Wins \(No Ties\) of Each Combination of Models", re.I)
 CAPTION_V = re.compile(r"\b(TABLE V): Elo Ratings, MLE Ratings, and Bootstrap Ratings", re.I)
 CAPTION_VI = re.compile(r"\b(TABLE VI): Scores Across All Cybersecurity Questions types", re.I)
 CAPTION_VII = re.compile(r"\b(TABLE VII):", re.I)
@@ -30,6 +32,8 @@ DECIMAL_ELO = re.compile(r"\d{3,4}\.\d{2}")
 BOOTSTRAP = re.compile(r"(\d{3,4}\.\d{2})\s*\((\d{3,4})-(\d{3,4})\)")
 TIME = re.compile(r"\d{1,3}\.\d{1,3}")
 COMPONENT = re.compile(r"[\w-]+ Retriever|Question Ret\. Sys\.|[\w-]+ BUFFERS|CONTEXT TRANSF\.", re.I)
+WIN_HEADING = re.compile(r"(.+?) General Qs Mul[ .-]+Hop [QO]s", re.I)
+WIN_PERCENT = re.compile(r"(?:100|[1-9]?\d)%")
 
 
 @dataclass(frozen=True)
@@ -79,7 +83,9 @@ def metric_columns(page: Page, definitions: Page, grid: Grid) -> list[Column]:
         "Correctness": ("answer correctness", ("RAGAS; 0.75 factual F1 + 0.25 semantic similarity",
                                                (r"\bAnswer\s+Correctness\b", r"0\.75\s+and\s+0\.25"))),
         "Accuracy": ("Accuracy", ("correct identification of vulnerability",
-                                  (r"identified\s+the\s+vulnerability",))),
+                                  (r"(?:For\s+CVEs,\s+accuracy\s+is\s+straightforward:\s+we\s+check\s+if\s+the\s+model"
+                                   r"\s+identified\s+the\s+correct\s+vulnerability|checking\s+whether\s+the\s+models"
+                                   r"\s+correctly\s+identified\s+the\s+vulnerability)",))),
     }
     if grid is PAIRED:
         cells = [(dataset, name, agg) for dataset in (GENERAL, MULTI_HOP)
@@ -93,12 +99,15 @@ def metric_columns(page: Page, definitions: Page, grid: Grid) -> list[Column]:
         source = page if label == "Accuracy" else definitions
         evidence = [fragment(source, pattern) for pattern in patterns]
         confirmed = all(evidence) and (label == "Accuracy" or bool(fragment(definitions, r"RAGAS\s+framework")))
+        variant_evidence = evidence[0] if confirmed else None
+        if confirmed and label == "Accuracy":
+            variant_evidence = fragment(source, r"\bidentified\s+the(?:\s+correct)?\s+vulnerability\b")
         columns.append(Column(
             Header(label, name, 0, None, "%" if label == "Accuracy" else None),
             dataset, agg, direction="higher_is_better" if agg != "std" else None,
             name_evidence=fragment(source, rf"\b{re.escape(name)}\b"),
             metric_variant=variant if confirmed else None,
-            metric_variant_evidence=evidence[0] if confirmed else None,
+            metric_variant_evidence=variant_evidence,
             aggregation_evidence=(fragment(definitions, r"mean\s*\([^)]*\)\s+and\s+standard deviation")
                                   if agg else None),
         ))
@@ -123,6 +132,46 @@ def reread_cell(image: ScanImage, engine: str, x: int, y: int,
         word = words[0]
         selections.append((word.text, crop.source_bbox(word.x0, word.y0, word.x1, word.y1)))
     return selections[0] if selections[0][0] == selections[1][0] else None
+
+
+def read_cell_view(image: ScanImage, engine: str, bounds: tuple[int, int, int, int],
+                   pattern: re.Pattern[str], threshold: int | None):
+    x0, y0, x1, y1 = bounds
+    crop = image.crop(x0, y0, x1, y1)
+    pixels = crop.pixels
+    if threshold is not None:
+        pixels = pixels.translate(bytes(0 if value < threshold else 255 for value in range(256)))
+    # A white margin prevents line OCR from treating an edge of the crop as a glyph.
+    pad = 15
+    margin = b"\xff" * pad
+    width = crop.width + 2 * pad
+    border = b"\xff" * (width * pad)
+    padded = border + b"".join(margin + pixels[start:start + crop.width] + margin
+                               for start in range(0, len(pixels), crop.width)) + border
+    words = recognize(replace(crop, width=width, height=crop.height + 2 * pad, pixels=padded),
+                      engine, psm=7, digits_only=True)
+    raw = "".join(word.text for word in sorted(words, key=lambda word: word.x))
+    if not pattern.fullmatch(raw):
+        return None
+    left, top = min(w.x0 for w in words) - pad, min(w.y0 for w in words) - pad
+    right, bottom = max(w.x1 for w in words) - pad, max(w.y1 for w in words) - pad
+    if not (0 <= left < right <= crop.width and 0 <= top < bottom <= crop.height):
+        return None
+    return raw, crop.source_bbox(left, top, right, bottom)
+
+
+def confirm_cell(image: ScanImage, engine: str, bounds: tuple[int, int, int, int],
+                 pattern: re.Pattern[str], regional: Word | None = None):
+    x0, y0, x1, y1 = bounds
+    readings = [read_cell_view(image, engine, bounds, pattern, 157),
+                read_cell_view(image, engine, (x0 - 12, y0 - 1, x1 + 12, y1 + 1), pattern, 168),
+                read_cell_view(image, engine, (x0 - 3, y0, x1 + 3, y1), pattern, None)]
+    if regional and pattern.fullmatch(regional.text):
+        readings.append((regional.text, image.source_bbox(regional.x0, regional.y0, regional.x1, regional.y1)))
+    counts = Counter(cell[0] for cell in readings if cell).most_common(2)
+    if not counts or counts[0][1] < 2 or (len(counts) == 2 and counts[0][1] == counts[1][1]):
+        return None
+    return next(cell for cell in readings if cell and cell[0] == counts[0][0])
 
 
 def scan_grid(page: Page, grid: Grid):
@@ -156,6 +205,12 @@ def scan_grid(page: Page, grid: Grid):
                 cell = (word.text, image.source_bbox(word.x0, word.y0, word.x1, word.y1))
             else:
                 cell = reread_cell(image, source.engine, x, y, pattern)
+                if cell is None and grid is PAIRED and len(candidates) <= 1:
+                    alternatives = [word for word in headings if abs(word.x - x) < 38 and abs(word.y - y) < 24]
+                    regional = alternatives[0] if len(alternatives) == 1 else None
+                    center = round(candidates[0].y if candidates else regional.y if regional else y)
+                    cell = confirm_cell(image, source.engine, (x - 58, center - 24, x + 58, center + 24),
+                                        pattern, regional)
             values.append(cell[0] if cell else None)
             row_boxes.append(cell[1] if cell else None)
         rows.append((label, values))
@@ -180,10 +235,70 @@ def bootstrap_cell(image: ScanImage, engine: str, words: tuple[Word, ...],
         )))
         if secondary is None or secondary.groups() != values:
             return None
+    return (values, image.source_bbox(x0, y0, x1, y1)) if ordered_interval(values) else None
+
+
+def ordered_interval(values: tuple[str, str, str]) -> bool:
     center, upper, lower = values
-    if not int(lower) <= float(center) <= int(upper):
+    return int(lower) <= float(center) <= int(upper)
+
+
+def win_cell(image: ScanImage, engine: str, x: int, y: int, regional: Word | None):
+    readings = []
+    for width, height, white in ((57, 23, 173), (73, 25, 220)):
+        crop = image.crop(x - width, y - height, x + width, y + height)
+        words = recognize(contrast(crop, white), engine, psm=7, digits_only=True)
+        if len(words) == 1 and WIN_PERCENT.fullmatch(words[0].text):
+            word = words[0]
+            readings.append((word.text, crop.source_bbox(word.x0, word.y0, word.x1, word.y1)))
+    if len(readings) == 2 and readings[0][0] == readings[1][0]:
+        return readings[0]
+    return confirm_cell(image, engine, (x - 58, y - 24, x + 58, y + 24), WIN_PERCENT, regional)
+
+
+def win_table(page: Page, label: str, caption: str, judge: tuple[Page, str]) -> Table | None:
+    source = page.scan
+    image = deskew(scan_region(source, (.10, .075, .92, .208)))
+    positions = ((872, 2), (1168, 3), (1464, -1), (1761, -2),
+                 (2056, -3), (2353, 5), (2651, 12), (2946, 20))
+    opponents = []
+    for left, right in ((720, 1300), (1320, 1900), (1930, 2500), (2540, 3100)):
+        heading = " ".join(w.text for w in recognize(image.crop(left, 238, right, 364), source.engine))
+        match = WIN_HEADING.fullmatch(heading)
+        if not match or not MODEL.fullmatch(match[1]) or match[1].casefold() in {n.casefold() for n in opponents}:
+            return None
+        opponents.append(match[1])
+    words = cropped_words(image, source.engine, (.055, .535, .94, .885))
+    row_centers = (407, 466, 522, 580)
+    labels = [" ".join(w.text for w in sorted(words, key=lambda w: w.x)
+                       if w.x1 < 730 and abs(w.y - y) < 24) for y in row_centers]
+    opponent_keys = [opponent.casefold() for opponent in opponents]
+    if (not MODEL.fullmatch(labels[0]) or labels[0].casefold() in opponent_keys
+            or [label.casefold() for label in labels[1:]] != opponent_keys[:-1]):
         return None
-    return values, image.source_bbox(x0, y0, x1, y1)
+    columns = []
+    for opponent in opponents:
+        for dataset, printed in ((GENERAL, "General Qs"), (MULTI_HOP, "Mul.Hop Qs")):
+            columns.append(Column(
+                Header(printed, "pairwise win fraction", 0, None, "%"), dataset, direction="higher_is_better",
+                source_label=f"{opponent} / {printed}",
+                metric_variant=f"reference-guided GPT-4 judging; opponent {opponent}; ties excluded",
+                metric_variant_evidence=judge,
+            ))
+    rows, boxes = [], []
+    for row, (model, y) in enumerate(zip(labels, row_centers, strict=True)):
+        values, row_boxes = [None] * len(columns), [None] * len(columns)
+        for index, (x, offset) in enumerate(positions):
+            if index // 2 < row:
+                continue
+            center = y + offset
+            candidates = [word for word in words if abs(word.x - x) < 38 and abs(word.y - center) < 21]
+            cell = win_cell(image, source.engine, x, center, candidates[0] if len(candidates) == 1 else None)
+            if cell:
+                values[index], row_boxes[index] = cell
+        rows.append((model, values))
+        boxes.append(tuple(row_boxes))
+    return Table(page, label, caption, 0, columns, rows, family="scanned_scores", value_bboxes=tuple(boxes))
 
 
 def rank_table(page: Page, label: str, caption: str, interval_evidence: tuple[Page, str] | None) -> Table | None:
@@ -210,9 +325,13 @@ def rank_table(page: Page, label: str, caption: str, interval_evidence: tuple[Pa
             model = " ".join(w.text for w in sorted(heading_words, key=lambda w: w.x)
                              if w.x1 < 394 and abs(w.y - y) < 24).strip("()| ")
         if not MODEL.fullmatch(model):
+            label_crop = image.crop(25, y - 35, 348, y + 17)
+            model = " ".join(w.text for w in recognize(label_crop, source.engine, psm=7))
+        if not MODEL.fullmatch(model):
             continue
         values, boxes = [], []
-        for x1, x2, left, right in ((449, 653, 788, 1255), (1350, 1552, 1686, 2150), (2246, 2448, 2580, 3050)):
+        for x1, x2, left, right, shift in ((449, 653, 788, 1255, 0), (1350, 1552, 1686, 2150, 0),
+                                           (2246, 2448, 2580, 3050, 23)):
             for x, pattern in ((x1, ELO), (x2, DECIMAL_ELO)):
                 matches = [word for word in body if abs(word.x - x) < 53 and abs(word.y - y) < 24
                            and pattern.fullmatch(word.text)]
@@ -221,9 +340,19 @@ def rank_table(page: Page, label: str, caption: str, interval_evidence: tuple[Pa
                     result = word.text, image.source_bbox(word.x0, word.y0, word.x1, word.y1)
                 else:
                     result = reread_cell(image, source.engine, x, y, pattern)
+                    if result is None and pattern is DECIMAL_ELO:
+                        center = y + (9 if shift else 0)
+                        result = confirm_cell(image, source.engine, (x - 77, center - 24, x + 77, center + 24), pattern)
                 values.append(result[0] if result else None)
                 boxes.append(result[1] if result else None)
-            result = bootstrap_cell(image, source.engine, body, left, right, y) if interval_evidence else None
+            result = None
+            if interval_evidence:
+                center = y + shift
+                result = bootstrap_cell(image, source.engine, body, left, right, center)
+                if result is None and shift:
+                    cell = confirm_cell(image, source.engine, (left + 9, center - 24, right - 4, center + 24), BOOTSTRAP)
+                    if cell and (match := BOOTSTRAP.fullmatch(cell[0])) and ordered_interval(match.groups()):
+                        result = match.groups(), cell[1]
             values.extend(result[0] if result else (None,) * 3)
             boxes.extend((result[1] if result else None,) * 3)
         rows.append((model, values))
@@ -284,7 +413,17 @@ def read_scanned_score_tables(pages: list[Page], tables: list[Table]) -> list[Ta
     interval_evidence = next((match for page in pages if page.scan and (match := fragment(
         page, r"median,\s*2\.5\s*%\s*,?\s*and\s*97\.5\s*%\s+percentiles",
     ))), None)
+    judge_evidence = next((match for page in pages if page.scan and fragment(
+        page, r"reference\s+response,\s+we\s+ask\s+GPT-4\s+0125-Preview\s+to\s+choose\s+the\s+best\s+response"
+              r"\s+between\s+Model\s+A\s+and\s+Model\s+B",
+    ) and (match := fragment(page, r"we\s+ask\s+GPT-4\s+0125-Preview"))), None)
     for page in pages:
+        if page.scan and judge_evidence and (wins := CAPTION_IV.search(page.prose)):
+            try:
+                if table := win_table(page, wins[1], wins[0], judge_evidence):
+                    recovered.append(table)
+            except (ExtractionError, ValueError) as error:
+                print(f"page {page.number}, {wins[1]} crop OCR: {error}", file=sys.stderr)
         if page.scan and (timing := CAPTION_VII.search(page.prose) or CAPTION_VII.search(page.text)):
             try:
                 if table := latency_table(page, timing[1], f"{timing[0]} Performance summary of RAG components"):

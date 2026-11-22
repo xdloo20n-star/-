@@ -6,7 +6,7 @@ from unittest.mock import patch
 from pdf_pages import Page, ScanSource, Word
 from publication import Payload, add_table
 from scan_ocr import ScanImage
-from scanned_score_tables import CVE_GRID, bootstrap_cell, latency_table, metric_columns, read_scanned_score_tables
+from scanned_score_tables import CVE_GRID, bootstrap_cell, latency_table, metric_columns, rank_table, read_scanned_score_tables
 
 
 CAPTION = "TABLE II: Comparative Assessment of RAG Models on 156 General and 150 Multi-Hop Cybersecurity Questions"
@@ -83,6 +83,82 @@ class ScannedScoreTableTest(unittest.TestCase):
         table, = self.collect(ambiguous=True)
         self.assertEqual(table.rows[0][1][2:5], ["0.95", None, "0.71"])
 
+    def test_paired_grid_recovers_an_independently_read_decimal(self):
+        words = tuple(Word(label, 300, y - 9, 690, y + 9)
+                      for label, y in zip(("MoRSE", "GPT-4 0125-Preview", "MIXTRAL 7X8",
+                                           "HACKERGPT", "GEMINI 1.0 Pro"), (449, 507, 563, 619, 677)))
+        body = words + (Word("043", 1019, 545, 1104, 581),)
+
+        def recognize(image, engine, psm=6, digits_only=False):
+            if image.height == self.canvas.height:
+                return self.recognized(image, engine)
+            if image.height > 100:
+                dx, dy = image.left - self.canvas.left, image.top - self.canvas.top
+                return tuple(Word(w.text, w.x0 - dx, w.y0 - dy, w.x1 - dx, w.y1 - dy) for w in body)
+            x0, y0 = image.left - self.canvas.left, image.top - self.canvas.top
+            if image.height > 75 and abs(x0 - 1000) < 25 and abs(y0 - 540) < 10:
+                return (Word("0.43", 1019 - x0 + 15, 545 - y0 + 15, 1104 - x0 + 15, 581 - y0 + 15),)
+            return ()
+
+        with patch("scanned_score_tables.scan_region", return_value=self.canvas), \
+             patch("scanned_score_tables.deskew", side_effect=lambda image: image), \
+             patch("scanned_score_tables.recognize", side_effect=recognize):
+            table, = read_scanned_score_tables([self.page], [])
+        payload = Payload(document={}, publication={})
+        add_table(payload, table, True)
+        result, = payload.results
+        source, = [e for e in payload.evidence if e["entity_id"] == result["result_id"] and e["field"] == "raw_value"]
+        self.assertEqual((result["metric_name"], result["raw_value"], result["aggregation"]),
+                         ("answer relevance", "0.43", "std"))
+        self.assertEqual((source["page"], source["table"], source["table_row"], source["table_column"], source["bbox"]),
+                         (8, "TABLE II", "MIXTRAL 7X8", "General Cybersecurity Questions / Relevance / std",
+                          self.canvas.source_bbox(1019, 545, 1104, 581)))
+
+    def test_win_grid_uses_the_opponent_and_never_reads_triangular_dashes(self):
+        caption = "TABLE IV: Fraction of Wins (No Ties) of Each Combination of Models"
+        page = Page(12, caption, "ocr_match", scan=self.scan)
+        protocol = Page(10, "Given a query and the corresponding reference response, we ask GPT-4 0125-Preview "
+                            "to choose the best response between Model A and Model B.", "ocr_match", scan=self.scan)
+        canvas = ScanImage(3346, 703, b"\xff" * (3346 * 703), 480, 4080, 5280, 408, 396)
+        opponents = ("GPT-4 0125-Preview", "GEMINI 1.0 Pro", "MIXTRAL 7X8", "HACKERGPT")
+        rows = tuple(Word(label, 276, y - 11, 650, y + 11) for label, y in
+                     zip(("MoRSE", *opponents[:3]), (407, 466, 522, 580)))
+
+        def collect(bad_heading=False):
+            def recognize(image, engine, psm=6, digits_only=False):
+                x0, y0 = image.left - canvas.left, image.top - canvas.top
+                if image.height == 126:
+                    index = (720, 1320, 1930, 2540).index(x0)
+                    dataset = "CVE Qs" if index == 0 and bad_heading else "Mul.Hop Qs"
+                    return (Word(f"{opponents[index]} General Qs {dataset}", 0, 2, 300, 95),)
+                if image.height > 150:
+                    return tuple(Word(w.text, w.x0 - x0, w.y0 - y0, w.x1 - x0, w.y1 - y0) for w in rows)
+                if abs(x0 - 800) < 30 and (y0 < 410 or 430 < y0 < 463):
+                    pad = 15 if image.height > 75 else 0
+                    return (Word("70%", 827 - x0 + pad, 393 - y0 + pad, 915 - x0 + pad, 428 - y0 + pad),)
+                return ()
+
+            with patch("scanned_score_tables.scan_region", return_value=canvas), \
+                 patch("scanned_score_tables.deskew", side_effect=lambda image: image), \
+                 patch("scanned_score_tables.recognize", side_effect=recognize):
+                return read_scanned_score_tables([self.page, protocol, page], [])
+
+        # Supply the score-table family anchor without invoking an unrelated crop for Table II.
+        paired = replace(self.page, text=f"Background {CAPTION}")
+        with patch.object(self, "page", paired), patch("scanned_score_tables.scan_grid", return_value=None):
+            table, = collect()
+            self.assertEqual(collect(bad_heading=True), [])
+        payload = Payload(document={}, publication={})
+        add_table(payload, table, True)
+        result, = payload.results
+        source, = [e for e in payload.evidence if e["entity_id"] == result["result_id"] and e["field"] == "raw_value"]
+        self.assertEqual((result["metric_name"], result["metric_variant"], result["raw_value"], result["raw_unit"]),
+                         ("pairwise win fraction", "reference-guided GPT-4 judging; opponent GPT-4 0125-Preview; ties excluded",
+                          "70%", "%"))
+        self.assertEqual((source["page"], source["table"], source["table_row"], source["table_column"], source["bbox"]),
+                         (12, "TABLE IV", "MoRSE", "GPT-4 0125-Preview / General Qs",
+                          canvas.source_bbox(827, 393, 915, 428)))
+
     def test_unrelated_caption_does_not_enable_fixed_grid(self):
         page = Page(8, "TABLE II: Comparative Assessment of Another Model", "ocr_match", scan=self.scan)
         self.assertEqual(self.collect(page=page), [])
@@ -94,12 +170,17 @@ class ScannedScoreTableTest(unittest.TestCase):
         self.assertEqual(self.collect(prior=(earlier,)), [earlier])
 
     def test_cve_accuracy_keeps_percent_and_has_no_aggregation(self):
-        page = Page(9, "We checked whether the models correctly identified the vulnerability.", "ocr_match")
+        page = Page(9, "For CVEs, accuracy is straightforward: we check if the model "
+                       "identified the correct vulnerability.", "ocr_match")
         columns = metric_columns(page, self.page, CVE_GRID)
         accuracy = columns[-1]
         self.assertEqual((accuracy.dataset, accuracy.header.name, accuracy.header.unit,
                           accuracy.aggregation, accuracy.aggregation_evidence),
                          ("CVE Questions", "Accuracy", "%", None, None))
+        self.assertEqual(accuracy.metric_variant, "correct identification of vulnerability")
+        self.assertEqual(accuracy.metric_variant_evidence, (page, "identified the correct vulnerability"))
+        other = Page(9, "We discuss whether an analyst identified the correct vulnerability.", "ocr_match")
+        self.assertIsNone(metric_columns(other, self.page, CVE_GRID)[-1].metric_variant)
 
     def test_bootstrap_cell_keeps_printed_endpoint_order(self):
         words = (Word("1225.54", 811, 343, 955, 365), Word("(1275-1175)", 1000, 343, 1220, 365))
@@ -110,6 +191,40 @@ class ScannedScoreTableTest(unittest.TestCase):
         self.assertEqual(bbox, self.canvas.source_bbox(788, 328, 1255, 382))
         with patch("scanned_score_tables.recognize", side_effect=[cropped, ()]):
             self.assertIsNone(bootstrap_cell(self.canvas, "tesseract", (), 788, 1255, 355))
+
+    def test_rank_grid_retains_abbreviated_model_and_reads_shifted_combined_interval(self):
+        caption = "TABLE V: Elo Ratings, MLE Ratings, and Bootstrap Ratings"
+        page = Page(12, caption, "ocr_match", scan=self.scan)
+        policy = (self.page, "median, 2.5% and 97.5% percentiles")
+        canvas = ScanImage(3077, 703, b"\xff" * (3077 * 703), 480, 4080, 5280, 514, 1077)
+        headings = tuple(Word(label, x, 254, x + 20, 279) for x, label in enumerate(
+            ("Model", "Elo", "Elo", "Bootstrap", "Elo", "Elo", "Bootstrap", "Elo", "Elo", "Bootstrap")))
+        models = (Word("MoRSE", 55, 332, 229, 369),)
+
+        def recognize(image, engine, psm=6, digits_only=False):
+            if image == canvas:
+                return headings
+            if image.left == canvas.left + 25 and image.top == canvas.top + 377:
+                return (Word("GPT-4", 30, 8, 157, 40), Word("0125", 180, 10, 279, 44))
+            if image.left in (canvas.left + 2580, canvas.left + 2584) and 406 <= image.top - canvas.top <= 415:
+                return (Word("1041.05(1050-932)", 43, 10, 430, 47),)
+            return ()
+
+        with patch("scanned_score_tables.scan_region", return_value=canvas), \
+             patch("scanned_score_tables.deskew", side_effect=lambda image: image), \
+             patch("scanned_score_tables.cropped_words", side_effect=(models, ())), \
+             patch("scanned_score_tables.recognize", side_effect=recognize):
+            table = rank_table(page, "TABLE V", caption, policy)
+        self.assertEqual(table.rows[1], ("GPT-4 0125", [None] * 12 + ["1041.05", "1050", "932"]))
+        payload = Payload(document={}, publication={})
+        add_table(payload, table, True)
+        result = payload.results[-1]
+        source, = [e for e in payload.evidence if e["entity_id"] == result["result_id"] and e["field"] == "raw_value"]
+        self.assertEqual((result["metric_name"], result["raw_value"], result["aggregation"]),
+                         ("bootstrap Elo", "932", "q0.025"))
+        self.assertEqual((source["page"], source["table"], source["table_row"], source["table_column"], source["bbox"]),
+                         (12, "TABLE V", "GPT-4 0125", "Complete Cybersecurity Questions / Bootstrap / q0.025",
+                          canvas.source_bbox(2580, 408, 3050, 462)))
 
     def test_latency_grid_distinguishes_gpu_cpu_means_and_deviations(self):
         page = Page(13, "TABLE VII: Performance summary of Structured and Unstructured RAG components. "

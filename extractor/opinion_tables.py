@@ -1,6 +1,7 @@
-"""Read the hybrid-retrieval depth sweep and verify repetitions of its main comparison."""
+"""Recover opinion-diversity comparisons from their positioned grids."""
 
 from dataclasses import replace
+from decimal import Decimal
 import re
 
 from failure_rates import visual_rows
@@ -28,19 +29,45 @@ METRICS = (
 DEPTH_HEADER = "k KB Config Match % Sent-Int Biz Impact Revenue Band Tenure Evidence Marker"
 GROUP_HEADER = "Entity Scored Diversity (σ) Categorical Coverage (%) Emot."
 DECIMAL = re.compile(r"\d+\.\d+")
+QUESTION_PREFIX = re.compile(r"Sentiment-Intensity σ by question type\b")
+ENTITY_PREFIX = re.compile(r"Diversity metrics on entity-matched docu-?")
+QUESTION_CAPTION = re.compile(QUESTION_PREFIX.pattern + r" \((k=(\d+))\)\.")
+ENTITY_CAPTION = re.compile(ENTITY_PREFIX.pattern + r" ?ments only \((k=(\d+)), forums dataset\)\.")
+QUESTION_TYPES = ("Detailed Overview", "Experience", "Business Impact", "Specific Examples", "Process", "Emotional")
+ENTITY_METRICS = (
+    ("Sent-Int σ", METRICS[1][1], METRICS[1][2]),
+    ("Biz Impact σ", METRICS[2][1], METRICS[2][2]),
+    ("Revenue Band Cov. (%)", METRICS[3][1], METRICS[3][2]),
+    ("Tenure Cov. (%)", METRICS[4][1], METRICS[4][2]),
+    ("Evidence Cov. (%)", METRICS[5][1], METRICS[5][2]),
+    ("Emot. Markers", METRICS[6][1], METRICS[6][2]),
+)
+MATCHED_DOCS = re.compile(r"Matched Docs \(of (\d+)\)")
+SIGNED_CHANGE = re.compile(r"([+−-]\d+\.\d+%)\*?")
 
 
 def read_opinion_tables(pages: list[Page], known: list[Table]) -> list[Table]:
     occupied = {(table.page.number, table.label.casefold()) for table in known}
     tables = list(known)
+    comparisons = []
+    replaced = set()
     for page in pages:
+        if page.verification != "text_match" or not page.words or not page.size:
+            continue
+        rows = visual_rows(page.words)
+        for prefix, is_entity in ((QUESTION_PREFIX, False), (ENTITY_PREFIX, True)):
+            match = re.search(r"^ *(Table \d+): " + prefix.pattern, page.text, re.M)
+            if not match or not (anchor := positioned_caption(rows, match[1], prefix)):
+                continue
+            if comparison := read_comparison(page, match[1], rows, anchor, is_entity):
+                comparisons.extend(comparison)
+                replaced.add((page.number, match[1].casefold()))
         match = DEPTH_CAPTION.search(page.text)
-        if not match or page.verification != "text_match" or not page.words or not page.size:
+        if not match:
             continue
         label = match[1]
         if (page.number, label.casefold()) in occupied:
             continue
-        rows = visual_rows(page.words)
         caption = positioned_caption(rows, label, re.compile(re.escape(DEPTH_PREFIX)))
         if caption is None:
             continue
@@ -62,6 +89,71 @@ def read_opinion_tables(pages: list[Page], known: list[Table]) -> list[Table]:
                     for column in table.columns
                 ]) for table in depth_tables]
             tables.extend(depth_tables)
+    return [table for table in tables if (table.page.number, table.label.casefold()) not in replaced] + comparisons
+
+
+def read_comparison(page: Page, label: str, rows: list[list[Word]], anchor: Word, entity: bool) -> list[Table]:
+    # The caption and grid both occupy the left column. Right-column prose
+    # can share a baseline with the caption or the neighboring numeric cells.
+    # Use word centers so wider bold percentages still belong to their column.
+    right = page.size[0] / 2
+    section = [line for row in rows if (line := [word for word in row
+               if anchor.x0 - 5 < word.x0 and word.x < right and anchor.y - 3 < word.y < anchor.y + 150])]
+    heading = "Metric Raw Enr. ∆" if entity else "Question Type Raw Enriched ∆"
+    header_indices = [i for i, row in enumerate(section) if words_text(row) == heading]
+    if len(header_indices) != 1:
+        return []
+    index = header_indices[0]
+    data = section[index + 1:]
+    caption_pattern = ENTITY_CAPTION if entity else QUESTION_CAPTION
+    caption = caption_pattern.search(" ".join(words_text(line) for line in section[:index]))
+    if not caption or len(data) != (7 if entity else len(QUESTION_TYPES)):
+        return []
+    depth = int(caption[2])
+    if depth <= 0:
+        return []
+
+    printed_rows = [words_text(row[:-3]) for row in data]
+    if entity:
+        count = MATCHED_DOCS.fullmatch(printed_rows[0])
+        if not count or printed_rows[1:] != [printed for printed, _, _ in ENTITY_METRICS]:
+            return []
+        metrics = [("entity-matched retrieved documents", None),
+                   *((metric, unit) for _, metric, unit in ENTITY_METRICS)]
+    else:
+        if tuple(printed_rows) != QUESTION_TYPES:
+            return []
+        metrics = [(METRICS[1][1], None)] * len(QUESTION_TYPES)
+
+    headings = section[index][-3:]
+    centers = [word.x for word in headings]
+    tables = []
+    for printed, row, (metric, unit) in zip(printed_rows, data, metrics, strict=True):
+        cells = row[-3:]
+        if not aligned(cells, centers, 5):
+            return []
+        raw, enriched, delta = (cell.text for cell in cells)
+        if entity and printed == printed_rows[0]:
+            if not all(value.isdecimal() and int(value) <= int(count[1]) for value in (raw, enriched)):
+                return []
+            delta_name = "entity-matched retrieved document count relative change"
+        else:
+            if not all(DECIMAL.fullmatch(value) for value in (raw, enriched)):
+                return []
+            delta_name = f"{metric} relative change"
+        change = SIGNED_CHANGE.fullmatch(delta)
+        if (not change or Decimal(enriched) == Decimal(raw)
+                or (change[1].startswith("+") != (Decimal(enriched) > Decimal(raw)))):
+            return []
+        columns = [Column(Header(word.text, name, word.x, depth, printed_unit), DATASET if entity else None,
+                          source_label=word.text)
+                   for word, name, printed_unit in zip(headings, (metric, metric, delta_name), (unit, unit, "%"),
+                                                       strict=True)]
+        for name, start, end in (("Traditional RAG Raw KB", 0, 1), ("O-RAG Enriched", 1, 3)):
+            values = [raw, enriched, change[1]][start:end]
+            tables.append(Table(page, label, f"{label}: {caption[0]}", int(row[0].y), columns[start:end],
+                                [(printed, values)], config_name=name, top_k=depth, top_k_evidence=(page, caption[1]),
+                                value_bboxes=normalized_boxes(page, cells[start:end])))
     return tables
 
 
